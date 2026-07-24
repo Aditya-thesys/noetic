@@ -174,6 +174,7 @@ interface SpawnWorkflowNode {
   id: string;
   child: WorkflowNode;
   timeout?: number;
+  layers?: string[];
 }
 ```
 
@@ -181,6 +182,7 @@ interface SpawnWorkflowNode {
 |-----------|----------|------------------------------------------------------|
 | `child`   | Yes      | The workflow subtree to execute in the child context. |
 | `timeout` | No       | Maximum wall-clock milliseconds for the child.       |
+| `layers`  | No       | Memory layer names resolved from the hydration context registry, same resolution as `provide` (unknown name → `UNKNOWN_LAYER_REFERENCE`). Omit to inherit the parent's layers, which is the default `spawn` behaviour (spec 04); naming layers **replaces** the inherited set for the child. |
 
 ### `provide`
 
@@ -548,7 +550,7 @@ Tree depth is enforced during hydration to prevent unbounded recursion in LLM-ge
 | **Until support**| None                                  | Full predicate union with combinators            |
 | **Model params** | None                                  | temperature, topP, maxTokens, stopSequences      |
 | **Tool args**    | None (tools on llm only)              | Explicit tool node with static args              |
-| **Memory layers**| None                                  | `provide` node with layer name resolution        |
+| **Memory layers**| None                                  | `provide` node, plus per-child layers on `spawn` |
 | **Periodics**    | None                                  | `every` node with interval + error handling      |
 | **Branching**    | None                                  | `branch` with substring match routes             |
 
@@ -619,6 +621,7 @@ const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(() =>
       id: z.string().min(1),
       child: WorkflowNodeSchema,
       timeout: z.number().int().positive().optional(),
+      layers: z.array(z.string().min(1)).min(1).optional(),
     }),
     z.object({
       kind: z.literal('provide'),

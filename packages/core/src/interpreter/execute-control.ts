@@ -24,6 +24,8 @@ import { createMessage, frameworkCast, isNoeticError, NoeticErrorImpl } from '@n
 import type { ChannelStore } from '../runtime/channel-store';
 import { ContextImpl } from '../runtime/context-impl';
 import { snapshotCwdState } from '../runtime/cwd-helpers';
+import type { ItemSchemaRegistry, LayerStateStore } from './action-deps';
+import { contextToExecCtx, returnLayers, spawnLayers } from './action-deps';
 import { cloneWithGuard } from './clone-guard';
 import { getContextChannelStore, isContextImpl, isMutableContext } from './typeguards';
 
@@ -69,15 +71,151 @@ function createChildContexts(ctx: Context, count: number, stepId: string): Conte
         resourceId,
         channelStore,
         cwdState: snapshotCwdState(ctx),
+        // Layers and the harness tool pool cross the fork boundary: without
+        // them an `llm` step inside a path would run with no memory
+        // projection and no layer tools, and a nested `spawn` would have no
+        // parent layers to inherit. Per-path layer STATE is still isolated —
+        // see `createForkLayerBridge`.
+        layers: ctx.layers,
+        unifiedTools: ctx.unifiedTools,
       }),
   );
+}
+
+/**
+ * Runs the memory-layer child-boundary lifecycle around each forked path.
+ *
+ * A fork path is a child execution exactly like a spawn child: `onSpawn`
+ * seeds its layer state from the parent's, and `onReturn` merges the path's
+ * contribution back when it succeeds. Without this, layer state written
+ * inside a path is keyed to the path's own execution id and is dropped when
+ * the path ends — so `durable-task-state` artifacts recorded by fan-out
+ * workers never reached the coordinator.
+ *
+ * Differences from `executeSpawn`, both deliberate:
+ * - `onSpawn` items are NOT appended. A fork child already inherits the
+ *   parent's full item log; spawn children start empty, which is what those
+ *   items exist to seed.
+ * - `onReturn` calls are serialised. Paths finish concurrently and each merge
+ *   is a read-modify-write of one parent state; unserialised, the last writer
+ *   would silently drop its siblings' contributions.
+ *
+ * Failed paths are not merged (same rule as `spawn`, whose `onReturn` is
+ * skipped when the child throws); their layer state is discarded on cleanup.
+ */
+interface ForkLayerBridge {
+  seed(index: number): Promise<void>;
+  settle<T>(index: number, result: T): Promise<T>;
+  cleanup(index: number): void;
+}
+
+function createForkLayerBridge({
+  ctx,
+  childContexts,
+  opts,
+}: {
+  ctx: Context<ContextMemory>;
+  childContexts: ContextImpl[];
+  opts?: ExecuteForkOpts;
+}): ForkLayerBridge | null {
+  const layers = ctx.layers;
+  const layerStore = opts?.layerStore;
+  if (!layers || layers.length === 0 || !layerStore) {
+    return null;
+  }
+
+  const parentExecCtx = contextToExecCtx(ctx);
+  const childExecCtxs = childContexts.map((child) => contextToExecCtx(child));
+  let tail: Promise<unknown> = Promise.resolve();
+
+  function serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const run = tail.then(fn, fn);
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  return {
+    async seed(index) {
+      await spawnLayers({
+        layers: layers ?? [],
+        parentCtx: parentExecCtx,
+        childCtx: childExecCtxs[index],
+        store: layerStore,
+        itemSchemas: opts?.itemSchemas,
+      });
+    },
+    settle(index, result) {
+      return serialize(() =>
+        returnLayers({
+          layers: layers ?? [],
+          parentCtx: parentExecCtx,
+          childCtx: childExecCtxs[index],
+          childLog: childContexts[index].itemLog,
+          result,
+          store: layerStore,
+        }),
+      );
+    },
+    cleanup(index) {
+      layerStore.cleanup(childExecCtxs[index].executionId);
+    },
+  };
+}
+
+/**
+ * Wraps the interpreter's `executeStep` so every forked path runs inside the
+ * layer child boundary. Contexts that are not one of this fork's children
+ * (nested steps within a path) pass straight through.
+ */
+function withForkLayers(
+  executeStep: ExecuteStepFn,
+  childContexts: ContextImpl[],
+  bridge: ForkLayerBridge | null,
+): ExecuteStepFn {
+  if (!bridge) {
+    return executeStep;
+  }
+  const indexByContext = new Map<Context, number>(
+    childContexts.map((child, i) => [
+      child,
+      i,
+    ]),
+  );
+
+  return async <TMemory, I, O>(
+    step: Step<TMemory, I, O>,
+    input: I,
+    childCtx: Context<TMemory>,
+  ): Promise<O> => {
+    const index = indexByContext.get(frameworkCast<Context>(childCtx));
+    if (index === undefined) {
+      return executeStep<TMemory, I, O>(step, input, childCtx);
+    }
+    await bridge.seed(index);
+    try {
+      const output = await executeStep<TMemory, I, O>(step, input, childCtx);
+      return await bridge.settle(index, output);
+    } finally {
+      bridge.cleanup(index);
+    }
+  };
+}
+
+/** Layer-boundary wiring supplied by the interpreter (see `buildSpawnOpts`). */
+export interface ExecuteForkOpts {
+  layerStore?: LayerStateStore;
+  itemSchemas?: ItemSchemaRegistry;
 }
 
 export async function executeFork<TMemory, I, O>(
   step: StepFork<TMemory, I, O>,
   input: I,
   ctx: Context<TMemory>,
-  executeStep: ExecuteStepFn,
+  rawExecuteStep: ExecuteStepFn,
+  opts?: ExecuteForkOpts,
 ): Promise<O> {
   const baseCtx = frameworkCast<Context<ContextMemory>>(ctx);
   const paths = step.paths(input, ctx);
@@ -99,6 +237,15 @@ export async function executeFork<TMemory, I, O>(
 
   const childContexts = createChildContexts(baseCtx, paths.length, step.id);
   const concurrency = step.concurrency ?? paths.length;
+  const executeStep = withForkLayers(
+    rawExecuteStep,
+    childContexts,
+    createForkLayerBridge({
+      ctx: baseCtx,
+      childContexts,
+      opts,
+    }),
+  );
 
   switch (step.mode) {
     case 'all':

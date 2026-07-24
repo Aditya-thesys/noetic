@@ -118,6 +118,18 @@ Each forked path receives a **deep clone** of the parent's `Context.state`. Muta
 
 This mirrors `spawn`'s deep-clone guarantee (see `04-spawn`) and prevents race conditions between concurrent paths.
 
+### Memory Layers
+
+A forked path is a child execution. Each path inherits the parent's memory layers and unified tool set, so `llm` steps inside a path keep their memory projection and layer tools, and a nested `spawn` has parent layers to inherit.
+
+Layer **state** is per-path, bracketed by the same hooks `spawn` uses (see `11-memory-layer-system`):
+
+- `onSpawn` seeds each path's layer state from the parent's before the path runs. Unlike `spawn`, items returned by `onSpawn` are NOT appended — a fork child already inherits the parent's full item log, which is what those items exist to seed for an otherwise-empty spawn child.
+- `onReturn` merges a path's contribution back into the parent when the path **succeeds**. Failed paths are not merged (matching `spawn`, whose `onReturn` is skipped when the child throws) and their layer state is discarded.
+- Merges are serialised across paths even though paths run concurrently: each `onReturn` is a read-modify-write of one parent state, so an unserialised merge would drop siblings' contributions.
+
+Layers that merge concurrent children should namespace by `childCtx.executionId` rather than merging keys shallowly — see `durableTaskState({ mergeData: 'namespace' })` in `12-builtin-memory-layers`.
+
 ### Error Behavior
 
 - **`mode: 'all'`** — If any path fails, cancel remaining paths and throw `fork_partial` (see `09-error-model`) with both succeeded and failed results. Cancellation is cooperative: paths still queued behind the `concurrency` limit are skipped, in-flight siblings are aborted and awaited (they stop at their next step boundary or blocked channel operation), and cancelled paths appear in `failed` with `{ kind: 'cancelled' }`. If the parent context itself is aborted mid-fork, the fork throws `cancelled`, not `fork_partial`.

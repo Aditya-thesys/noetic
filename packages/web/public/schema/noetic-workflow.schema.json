@@ -316,6 +316,14 @@
             "timeout": {
               "type": "number",
               "exclusiveMinimum": 0
+            },
+            "layers": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "required": [

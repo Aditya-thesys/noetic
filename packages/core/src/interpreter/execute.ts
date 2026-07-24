@@ -265,7 +265,12 @@ export async function execute<TMemory = ContextMemory, I = unknown, O = unknown>
         result = await executeBranch(step, input, ctx, (s, i, c) => execute(s, i, c));
         break;
       case 'fork':
-        result = await executeFork(step, input, ctx, (s, i, c) => execute(s, i, c));
+        result = await executeFork(step, input, ctx, (s, i, c) => execute(s, i, c), {
+          // Fork paths are child executions: the layer store lets their
+          // `onSpawn`/`onReturn` boundary run (see `createForkLayerBridge`).
+          layerStore: harnessWithLayerStore(baseCtx).layerStateStore,
+          itemSchemas: baseCtx.itemSchemas,
+        });
         break;
       case 'spawn':
         result = await dispatchViaAdapter(step, input, ctx, () =>

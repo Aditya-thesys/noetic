@@ -326,6 +326,13 @@ export interface SpawnWorkflowNode extends WorkflowNodeBase {
   kind: 'spawn';
   child: WorkflowNode;
   timeout?: number;
+  /**
+   * Memory layers the child runs with, by registered name (resolved from
+   * `HydrationContext.layers`, like `provide`). Omit to inherit the parent's
+   * layers — the default spawn behaviour. Naming layers here REPLACES the
+   * inherited set for the child, so list every layer the child needs.
+   */
+  layers?: string[];
 }
 
 export interface ProvideWorkflowNode extends WorkflowNodeBase {
@@ -456,6 +463,7 @@ const SpawnNodeSchema = z.object({
   ...SHARED_FIELDS,
   child: WorkflowNodeRef,
   timeout: z.number().positive().optional(),
+  layers: z.array(z.string().min(1)).min(1).optional(),
 });
 
 const ProvideNodeSchema = z.object({

@@ -159,6 +159,18 @@ const throttled = fork({
 });
 ```
 
+## Memory Layers
+
+Each path is a child execution. It inherits the parent's memory layers and tool pool, so `llm` steps inside a path keep their memory projection and layer tools, and a nested `spawn` has layers to inherit.
+
+Layer *state* is per path:
+
+- `onSpawn` seeds each path's state from the parent's before the path runs. Items returned by `onSpawn` are not appended -- a fork child already has the parent's full item log.
+- `onReturn` merges a successful path's contribution back into the parent. A failed path is not merged, and its state is discarded.
+- Merges run one at a time even though paths run concurrently, so no path's contribution is lost to a concurrent read-modify-write.
+
+For layers that collect artifacts from many workers, choose a merge strategy that namespaces per child -- see [`durableTaskState({ mergeData: 'namespace' })`](/docs/framework/memory/durable-task-state).
+
 ## Related
 
 - [branch](/docs/framework/operators/branch) -- conditional routing for single-path decisions.

@@ -273,6 +273,16 @@ Run a child node in an isolated child context.
 | `id` | `string` | required | Unique step identifier. |
 | `child` | `WorkflowNode` | required | The node to execute in a child context. |
 | `timeout` | `number` | `undefined` | Timeout in milliseconds. |
+| `layers` | `string[]` | `undefined` | Memory layer names for the child, resolved from the hydration context registry (same resolution as `provide`). Omit to inherit the parent's layers; naming layers **replaces** them for the child. |
+
+```json
+{
+  "kind": "spawn",
+  "id": "worker",
+  "child": { "kind": "llm", "id": "work", "instructions": "Do the unit of work" },
+  "layers": ["durable-task-state"]
+}
+```
 
 ### provide
 

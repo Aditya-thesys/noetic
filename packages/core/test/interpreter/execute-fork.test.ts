@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import assert from 'node:assert';
-import type { ContextMemory } from '@noetic-tools/memory';
+import type { ContextMemory, LayerStateStore, MemoryLayer } from '@noetic-tools/memory';
+import { createLayerStateStore, Slot } from '@noetic-tools/memory';
 import type {
   Context,
   SettleResult,
@@ -8,7 +9,7 @@ import type {
   StepForkRace,
   StepForkSettle,
 } from '@noetic-tools/types';
-import { isNoeticError } from '@noetic-tools/types';
+import { frameworkCast, isNoeticError } from '@noetic-tools/types';
 import { z } from 'zod';
 import { channel } from '../../src/builders/channel-builder';
 import { loop } from '../../src/builders/loop-builder';
@@ -17,7 +18,7 @@ import { executeFork } from '../../src/interpreter/execute-control';
 import { ChannelStore } from '../../src/runtime/channel-store';
 import { ContextImpl } from '../../src/runtime/context-impl';
 import { until } from '../../src/until/predicates';
-import { makeMockHarness, simpleExecute } from '../_helpers';
+import { makeMessage, makeMockHarness, simpleExecute } from '../_helpers';
 
 const _StateSchema = z.record(z.string(), z.unknown());
 
@@ -639,6 +640,313 @@ describe('executeFork', () => {
       expect(senderError).toBeNull();
       assert(received !== undefined);
       expect(received).toBe(7);
+    });
+  });
+
+  describe('memory-layer child boundary', () => {
+    interface ArtifactState {
+      files: string[];
+    }
+
+    function makeArtifactLayer(overrides?: Partial<MemoryLayer['hooks']>): MemoryLayer {
+      return {
+        id: 'artifacts',
+        name: 'artifacts',
+        slot: Slot.WORKING_MEMORY,
+        scope: 'execution',
+        hooks: {
+          onSpawn: async ({ parentState }) => ({
+            childState: structuredClone(parentState),
+          }),
+          onReturn: async ({ parentState, childState }) => {
+            const parent = frameworkCast<ArtifactState>(parentState);
+            const child = frameworkCast<ArtifactState>(childState);
+            return {
+              parentState: {
+                files: [
+                  ...new Set([
+                    ...parent.files,
+                    ...child.files,
+                  ]),
+                ],
+              },
+            };
+          },
+          ...overrides,
+        },
+      };
+    }
+
+    /** A path that records one artifact into its own (child) layer state. */
+    function makeRecordingPath(id: string, file: string, store: LayerStateStore) {
+      return {
+        kind: 'run' as const,
+        id,
+        execute: async (_input: string, c: Context<ContextMemory>): Promise<string> => {
+          const seeded = frameworkCast<ArtifactState | undefined>(store.get(c.id, 'artifacts'));
+          store.set(c.id, 'artifacts', {
+            files: [
+              ...(seeded?.files ?? []),
+              file,
+            ],
+          });
+          return file;
+        },
+      };
+    }
+
+    it('seeds each path via onSpawn and merges every path back via onReturn', async () => {
+      const store = createLayerStateStore();
+      const layer = makeArtifactLayer();
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+        layers: [
+          layer,
+        ],
+      });
+      store.set(ctx.id, 'artifacts', {
+        files: [
+          'coordinator.ts',
+        ],
+      });
+
+      const step: StepForkAll<ContextMemory, string, string> = {
+        kind: 'fork',
+        id: 'fan-out',
+        mode: 'all',
+        paths: () => [
+          makeRecordingPath('worker-a', 'a.ts', store),
+          makeRecordingPath('worker-b', 'b.ts', store),
+        ],
+        merge: (results) => results.join(','),
+      };
+
+      const merged = await executeFork(step, '', ctx, simpleExecute, {
+        layerStore: store,
+      });
+      expect(merged).toBe('a.ts,b.ts');
+
+      // Both workers' artifacts reached the parent, and each worker started
+      // from a clone of the parent's state (onSpawn).
+      const parentState = frameworkCast<ArtifactState>(store.get(ctx.id, 'artifacts'));
+      expect(
+        [
+          ...parentState.files,
+        ].sort(),
+      ).toEqual([
+        'a.ts',
+        'b.ts',
+        'coordinator.ts',
+      ]);
+    });
+
+    it('discards a failed path and still merges its successful siblings (settle)', async () => {
+      const store = createLayerStateStore();
+      const layer = makeArtifactLayer();
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+        layers: [
+          layer,
+        ],
+      });
+      store.set(ctx.id, 'artifacts', {
+        files: [],
+      });
+
+      const step: StepForkSettle<ContextMemory, string, string> = {
+        kind: 'fork',
+        id: 'partial-fan-out',
+        mode: 'settle',
+        paths: () => [
+          makeRecordingPath('ok', 'ok.ts', store),
+          {
+            kind: 'run',
+            id: 'boom',
+            execute: async (_input: string, c: Context<ContextMemory>): Promise<string> => {
+              store.set(c.id, 'artifacts', {
+                files: [
+                  'never.ts',
+                ],
+              });
+              throw new Error('worker failed');
+            },
+          },
+        ],
+        merge: (results: SettleResult<string>[]) =>
+          results.filter((r) => r.status === 'fulfilled').length.toString(),
+      };
+
+      const fulfilled = await executeFork(step, '', ctx, simpleExecute, {
+        layerStore: store,
+      });
+      expect(fulfilled).toBe('1');
+
+      const parentState = frameworkCast<ArtifactState>(store.get(ctx.id, 'artifacts'));
+      expect(parentState.files).toEqual([
+        'ok.ts',
+      ]);
+    });
+
+    it('cleans up each child layer state after its path finishes', async () => {
+      const store = createLayerStateStore();
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+        layers: [
+          makeArtifactLayer(),
+        ],
+      });
+      store.set(ctx.id, 'artifacts', {
+        files: [],
+      });
+
+      const childIds: string[] = [];
+      const step: StepForkAll<ContextMemory, string, string> = {
+        kind: 'fork',
+        id: 'cleanup',
+        mode: 'all',
+        paths: () => [
+          {
+            kind: 'run',
+            id: 'p',
+            execute: async (_input: string, c: Context<ContextMemory>): Promise<string> => {
+              childIds.push(c.id);
+              store.set(c.id, 'artifacts', {
+                files: [
+                  'p.ts',
+                ],
+              });
+              return 'p';
+            },
+          },
+        ],
+        merge: (results) => results.join(''),
+      };
+
+      await executeFork(step, '', ctx, simpleExecute, {
+        layerStore: store,
+      });
+      expect(childIds).toHaveLength(1);
+      expect(store.get(childIds[0], 'artifacts')).toBeUndefined();
+    });
+
+    it('forked children inherit the parent layers and tool pool', async () => {
+      const layer = makeArtifactLayer();
+      const tool = {
+        name: 'noop',
+        description: 'noop',
+        input: z.object({}),
+        output: z.string(),
+        execute: async () => 'ok',
+      };
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+        layers: [
+          layer,
+        ],
+        unifiedTools: [
+          tool,
+        ],
+      });
+
+      let childLayerIds: string[] = [];
+      let childToolNames: string[] = [];
+      const step: StepForkAll<ContextMemory, string, string> = {
+        kind: 'fork',
+        id: 'inherit',
+        mode: 'all',
+        paths: () => [
+          {
+            kind: 'run',
+            id: 'p',
+            execute: async (_input: string, c: Context<ContextMemory>): Promise<string> => {
+              childLayerIds = (c.layers ?? []).map((l) => l.id);
+              childToolNames = (c.unifiedTools ?? []).map((t) => t.name);
+              return 'p';
+            },
+          },
+        ],
+        merge: (results) => results.join(''),
+      };
+
+      await executeFork(step, '', ctx, simpleExecute, {
+        layerStore: createLayerStateStore(),
+      });
+      expect(childLayerIds).toEqual([
+        'artifacts',
+      ]);
+      expect(childToolNames).toEqual([
+        'noop',
+      ]);
+    });
+
+    it('does not append onSpawn items — a fork child already has the parent log', async () => {
+      const store = createLayerStateStore();
+      const layer = makeArtifactLayer({
+        onSpawn: async ({ parentState }) => ({
+          childState: structuredClone(parentState),
+          items: [
+            makeMessage('user', 'seeded by layer', 'seed-1'),
+          ],
+        }),
+      });
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+        layers: [
+          layer,
+        ],
+      });
+      ctx.itemLog.append(makeMessage('user', 'parent turn', 'p1'));
+      store.set(ctx.id, 'artifacts', {
+        files: [],
+      });
+
+      let childItemCount = -1;
+      const step: StepForkAll<ContextMemory, string, string> = {
+        kind: 'fork',
+        id: 'no-double-seed',
+        mode: 'all',
+        paths: () => [
+          {
+            kind: 'run',
+            id: 'p',
+            execute: async (_input: string, c: Context<ContextMemory>): Promise<string> => {
+              childItemCount = c.itemLog.items.length;
+              return 'p';
+            },
+          },
+        ],
+        merge: (results) => results.join(''),
+      };
+
+      await executeFork(step, '', ctx, simpleExecute, {
+        layerStore: store,
+      });
+      expect(childItemCount).toBe(1);
+    });
+
+    it('runs no boundary at all when the parent has no layers', async () => {
+      const store = createLayerStateStore();
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+      });
+      const step: StepForkAll<ContextMemory, number, number> = {
+        kind: 'fork',
+        id: 'no-layers',
+        mode: 'all',
+        paths: () => [
+          {
+            kind: 'run',
+            id: 'a',
+            execute: async (i: number) => i + 1,
+          },
+        ],
+        merge: (results) => results.reduce((a, b) => a + b, 0),
+      };
+      expect(
+        await executeFork(step, 1, ctx, simpleExecute, {
+          layerStore: store,
+        }),
+      ).toBe(2);
     });
   });
 

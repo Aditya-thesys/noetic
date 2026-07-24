@@ -3,7 +3,7 @@
  * then hydrates and runs it within the same harness session.
  */
 
-import type { ContextMemory } from '@noetic-tools/memory';
+import type { ContextMemory, MemoryLayer } from '@noetic-tools/memory';
 import type {
   AgentHarnessContract,
   Context,
@@ -164,6 +164,12 @@ export interface ParseAndRunWorkflowOpts {
   tools: Tool[];
   input?: string;
   maxDepth?: number;
+  /**
+   * Memory layers the document's `provide` / `spawn` nodes may reference by name.
+   * Without a registry those nodes resolve to NO layers rather than failing, so a
+   * host that runs layer-bearing workflows must pass its layers here.
+   */
+  layers?: ReadonlyMap<string, MemoryLayer>;
 }
 
 /**
@@ -194,6 +200,7 @@ export async function parseAndRunWorkflow(opts: ParseAndRunWorkflowOpts): Promis
   const hydrationCtx: HydrationContext = {
     tools: buildToolMap(opts.tools),
     executeStep,
+    layers: opts.layers,
   };
 
   const hydrated = hydrateWorkflow(parseResult.doc, hydrationCtx);

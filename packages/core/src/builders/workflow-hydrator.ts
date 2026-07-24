@@ -392,6 +392,42 @@ function hydrateForkNode(
   });
 }
 
+/**
+ * Resolves layer names declared on a `provide` / `spawn` node against the
+ * registry on `HydrationContext.layers`. Returns `[]` when no registry was
+ * supplied — the host runs with its harness-default layers in that case.
+ */
+function resolveNamedLayers({
+  names,
+  nodeKind,
+  nodeId,
+  ctx,
+}: {
+  names: ReadonlyArray<string>;
+  nodeKind: string;
+  nodeId: string;
+  ctx: HydrationContext;
+}): MemoryLayer[] {
+  if (!ctx.layers) {
+    return [];
+  }
+  return names.map((name) => {
+    const layer = ctx.layers?.get(name);
+    if (!layer) {
+      throw new NoeticConfigError({
+        code: 'UNKNOWN_LAYER_REFERENCE',
+        message: `Memory layer '${name}' referenced in ${nodeKind} node '${nodeId}' is not registered.`,
+        hint: `Available layers: ${
+          [
+            ...(ctx.layers?.keys() ?? []),
+          ].join(', ') || '(none)'
+        }. Pass named layers via HydrationContext.layers.`,
+      });
+    }
+    return layer;
+  });
+}
+
 function hydrateSpawnNode(
   node: WorkflowNode,
   ctx: HydrationContext,
@@ -399,10 +435,21 @@ function hydrateSpawnNode(
   if (node.kind !== 'spawn') {
     return frameworkCast(undefined);
   }
+  // `memory` is left undefined when the node names no layers so the child
+  // inherits the parent's layers (spec 04). An explicit list replaces them.
+  const resolvedLayers = node.layers
+    ? resolveNamedLayers({
+        names: node.layers,
+        nodeKind: 'spawn',
+        nodeId: node.id,
+        ctx,
+      })
+    : undefined;
   return spawn({
     id: node.id,
     child: hydrateNode(node.child, ctx),
     timeout: node.timeout,
+    memory: resolvedLayers,
   });
 }
 
@@ -413,27 +460,15 @@ function hydrateProvideNode(
   if (node.kind !== 'provide') {
     return frameworkCast(undefined);
   }
-  const resolvedLayers = ctx.layers
-    ? node.layers.map((name) => {
-        const layer = ctx.layers?.get(name);
-        if (!layer) {
-          throw new NoeticConfigError({
-            code: 'UNKNOWN_LAYER_REFERENCE',
-            message: `Memory layer '${name}' referenced in provide node '${node.id}' is not registered.`,
-            hint: `Available layers: ${
-              [
-                ...(ctx.layers?.keys() ?? []),
-              ].join(', ') || '(none)'
-            }. Pass named layers via HydrationContext.layers.`,
-          });
-        }
-        return layer;
-      })
-    : [];
   return provide({
     id: node.id,
     child: hydrateNode(node.child, ctx),
-    memory: resolvedLayers,
+    memory: resolveNamedLayers({
+      names: node.layers,
+      nodeKind: 'provide',
+      nodeId: node.id,
+      ctx,
+    }),
   });
 }
 

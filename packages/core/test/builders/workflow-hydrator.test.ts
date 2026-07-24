@@ -375,6 +375,77 @@ describe('hydrateNode — spawn', () => {
     expect(result.timeout).toBe(1e4);
     expect(result.child.kind).toBe('llm');
   });
+
+  test('leaves memory undefined when no layers are named (child inherits parent layers)', () => {
+    const node: WorkflowNode = {
+      kind: 'spawn',
+      id: 'spawn-inherit',
+      child: {
+        kind: 'llm',
+        id: 'child',
+        instructions: 'run',
+      },
+    };
+    const result = hydrateNode(node, makeHydrationContext());
+    assert(result.kind === 'spawn');
+    expect(result.memory).toBeUndefined();
+  });
+
+  test('resolves named layers onto the spawned child', () => {
+    const mockLayer: MemoryLayer = frameworkCast({
+      id: 'durable-task-state',
+      slot: 110,
+    });
+    const node: WorkflowNode = {
+      kind: 'spawn',
+      id: 'spawn-with-layers',
+      child: {
+        kind: 'llm',
+        id: 'child',
+        instructions: 'run',
+      },
+      layers: [
+        'durable-task-state',
+      ],
+    };
+    const ctx = makeHydrationContext();
+    ctx.layers = new Map([
+      [
+        'durable-task-state',
+        mockLayer,
+      ],
+    ]);
+    const result = hydrateNode(node, ctx);
+    assert(result.kind === 'spawn');
+    expect(result.memory).toEqual([
+      mockLayer,
+    ]);
+  });
+
+  test('throws UNKNOWN_LAYER_REFERENCE for a missing spawn layer', () => {
+    const node: WorkflowNode = {
+      kind: 'spawn',
+      id: 'spawn-bad-layer',
+      child: {
+        kind: 'llm',
+        id: 'child',
+        instructions: 'run',
+      },
+      layers: [
+        'nonexistent',
+      ],
+    };
+    const ctx = makeHydrationContext();
+    ctx.layers = new Map();
+    try {
+      hydrateNode(node, ctx);
+      expect.unreachable('should have thrown');
+    } catch (e: unknown) {
+      assert(isNoeticConfigError(e));
+      expect(e.code).toBe('UNKNOWN_LAYER_REFERENCE');
+      expect(e.message).toContain("spawn node 'spawn-bad-layer'");
+    }
+  });
 });
 
 describe('hydrateNode — loop', () => {

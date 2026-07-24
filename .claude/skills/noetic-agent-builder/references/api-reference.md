@@ -102,6 +102,8 @@ fork<I, O>({ id, mode: 'settle', paths: () => Step[], merge: (results: SettleRes
 
 Each fork path gets a deep clone of parent state. Mutations in one path don't affect siblings.
 
+Each path is also a memory child boundary: it inherits the parent's layers and tool pool, `onSpawn` seeds its per-path layer state (items from `onSpawn` are NOT appended — the path already has the parent's item log), and `onReturn` merges a *successful* path back. Merges are serialised across paths, so concurrent workers don't clobber one parent state.
+
 ### spawn
 
 Child execution with context boundary. Memory layers control what state crosses the boundary.
@@ -474,8 +476,13 @@ temporalMemory({
 Persists file lists and checkpoints across executions/iterations within a thread (scope `'thread'`, not `'execution'` — an execution-scoped key would rotate each run and defeat durable rehydration). Checkpoints are capped at the newest 50; `recall` trims its `<task_state>` render to the allocated budget (oldest checkpoints dropped first).
 
 ```typescript
-durableTaskState()  // no configuration
+durableTaskState({ mergeData? })  // 'shallow' (default) | 'namespace'
+// id 'durable-task-state', slot 110, scope 'thread', budget { min: 100, max: 800 }
 ```
+
+Writable by the model via `provides` → tools `durable-task-state/recordArtifact` (`{ path }` → appends to `files`, idempotent) and `durable-task-state/setTaskData` (`{ key, value }` → sets `data[key]`; refuses the reserved `__outcome`). Recorded artifacts cross child boundaries: `onReturn` unions `files` and merges `data`.
+
+`mergeData` picks the `data` merge at a spawn/fork return: `'shallow'` is `{ ...parent, ...child }` (concurrent workers writing the same key clobber each other), `'namespace'` stores the child's map under `childCtx.executionId` — use it for coordinator/worker fan-out.
 
 ### fileReference
 
@@ -1726,6 +1733,8 @@ const step = hydrateWorkflow(doc, ctx);
 ```
 
 An `llm` node opts into a generative-UI codec with `output: { codec: 'openui', library: '<ref>' }`; the hydrator resolves `<ref>` from `ctx.uiLibraries` to a live `OutputCodec` and throws `UNKNOWN_UI_LIBRARY_REFERENCE` if it is unregistered. See [Generative UI](#generative-ui-openui).
+
+**Named memory layers.** Both `provide` (`layers`, required) and `spawn` (`layers`, optional) resolve layer names from `ctx.layers` (a `ReadonlyMap<string, MemoryLayer>`); an unregistered name throws `UNKNOWN_LAYER_REFERENCE`. A `spawn` node with no `layers` inherits the parent's layers — the default spawn behaviour; naming them replaces the inherited set for the child. Without `ctx.layers` supplied, named layers resolve to `[]` and the harness defaults apply.
 
 ### dynamicWorkflow
 
