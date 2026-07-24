@@ -1,3 +1,7 @@
+## @noetic-tools/core-v2.4.0 (2026-07-24)
+
+* feat(core): accept a ui declaration on the tool builders ([343915a](https://github.com/mattapperson/noetic/commit/343915a))
+
 ## @noetic-tools/core-v2.3.0 (2026-07-24)
 
 * fix(core): update plan/setPlanTree tests to the wrapped input shape ([62d4b41](https://github.com/mattapperson/noetic/commit/62d4b41))
