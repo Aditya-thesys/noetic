@@ -1,3 +1,7 @@
+## @noetic-tools/types-v1.4.0 (2026-07-24)
+
+* feat(memory): give durable-task-state a write API and a fan-out-safe merge ([f09d5b0](https://github.com/mattapperson/noetic/commit/f09d5b0))
+
 ## @noetic-tools/types-v1.3.0 (2026-07-07)
 
 * feat(core): generative UI via OpenUI (codec, surface layer, tool UI, transport) ([3a922d8](https://github.com/mattapperson/noetic/commit/3a922d8))
