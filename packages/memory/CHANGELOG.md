@@ -1,3 +1,7 @@
+## @noetic-tools/memory-v1.1.0 (2026-07-24)
+
+* feat(memory): give durable-task-state a write API and a fan-out-safe merge ([f09d5b0](https://github.com/mattapperson/noetic/commit/f09d5b0))
+
 ## @noetic-tools/memory-v1.0.3 (2026-07-20)
 
 * fix(memory): accept plan/setPlanTree tree as object or JSON string ([25a4a72](https://github.com/mattapperson/noetic/commit/25a4a72))
