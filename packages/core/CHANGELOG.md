@@ -1,3 +1,9 @@
+## @noetic-tools/core-v2.3.0 (2026-07-24)
+
+* fix(core): update plan/setPlanTree tests to the wrapped input shape ([62d4b41](https://github.com/mattapperson/noetic/commit/62d4b41))
+* feat(core): run the memory-layer boundary for fork paths and scope layers per spawn ([c7c4c5c](https://github.com/mattapperson/noetic/commit/c7c4c5c))
+* feat(memory): give durable-task-state a write API and a fan-out-safe merge ([f09d5b0](https://github.com/mattapperson/noetic/commit/f09d5b0))
+
 ## @noetic-tools/core-v2.2.1 (2026-07-08)
 
 * fix(core): make serveOpenUi stream the rendered UI end-to-end ([c579315](https://github.com/mattapperson/noetic/commit/c579315))
