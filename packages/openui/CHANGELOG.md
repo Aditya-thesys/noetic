@@ -1,3 +1,7 @@
+## @noetic-tools/openui-v1.1.1 (2026-07-24)
+
+* fix(web): make the generative-UI docs typecheck ([211dea9](https://github.com/mattapperson/noetic/commit/211dea9))
+
 ## @noetic-tools/openui-v1.1.0 (2026-07-24)
 
 * feat(memory): give durable-task-state a write API and a fan-out-safe merge ([f09d5b0](https://github.com/mattapperson/noetic/commit/f09d5b0))
