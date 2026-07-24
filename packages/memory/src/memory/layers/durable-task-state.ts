@@ -1,5 +1,7 @@
 import type { MemoryLayer } from '@noetic-tools/types';
 import { createMessage, estimateTokens, Slot } from '@noetic-tools/types';
+import { z } from 'zod';
+import { layerFn } from '../layer-provides';
 
 export interface DurableTaskState {
   checkpoints: Array<{
@@ -8,6 +10,30 @@ export interface DurableTaskState {
   }>;
   files: string[];
   data: Record<string, unknown>;
+}
+
+/**
+ * How a child's `data` map is merged into the parent's at a spawn/fork return.
+ *
+ * - `'shallow'` — `{ ...parent, ...child }`. Concurrent children that write the
+ *   same key clobber each other (last to return wins). Fine for a single child.
+ * - `'namespace'` — the child's map is stored whole under its execution id
+ *   (`parent.data[childExecutionId] = childData`), so N fan-out workers each
+ *   keep their own result. Keys the child inherited from the parent unchanged
+ *   are not re-written at the top level.
+ *
+ * @public
+ */
+export type DurableTaskDataMerge = 'shallow' | 'namespace';
+
+/** @public Options for {@link durableTaskState}. */
+export interface DurableTaskStateOptions {
+  /**
+   * Merge strategy for `data` at a child boundary. Defaults to `'shallow'`.
+   * Use `'namespace'` for coordinator/worker fan-out, where several children
+   * return concurrently into one parent.
+   */
+  mergeData?: DurableTaskDataMerge;
 }
 
 /**
@@ -31,6 +57,29 @@ function renderTaskState(state: DurableTaskState): string {
   return `<task_state>\n${JSON.stringify(state, null, 2)}\n</task_state>`;
 }
 
+function mergeChildData({
+  parent,
+  childState,
+  childExecutionId,
+  mergeData,
+}: {
+  parent: DurableTaskState;
+  childState: DurableTaskState;
+  childExecutionId: string;
+  mergeData: DurableTaskDataMerge;
+}): Record<string, unknown> {
+  if (mergeData === 'shallow') {
+    return {
+      ...parent.data,
+      ...childState.data,
+    };
+  }
+  return {
+    ...parent.data,
+    [childExecutionId]: childState.data,
+  };
+}
+
 /**
  * Creates a memory layer that persists task checkpoints, files, and arbitrary data across iterations.
  *
@@ -38,10 +87,18 @@ function renderTaskState(state: DurableTaskState): string {
  * runtime's durable write-through; `store` appends capped checkpoints
  * (newest 50 kept) and `recall` trims its render to the allocated budget.
  *
+ * The layer is writable from the model: `provides` exposes
+ * `durable-task-state/recordArtifact` (append a produced/modified file path)
+ * and `durable-task-state/setTaskData` (record a structured result under a
+ * key). Both survive the spawn boundary — a worker's artifacts merge back into
+ * its coordinator via `onReturn`.
+ *
  * @public
+ * @param opts - Layer options; `mergeData` selects the `data` merge strategy at a child boundary.
  * @returns A `MemoryLayer` scoped to the thread with durable task state.
  */
-export function durableTaskState() {
+export function durableTaskState(opts: DurableTaskStateOptions = {}) {
+  const mergeData: DurableTaskDataMerge = opts.mergeData ?? 'shallow';
   return {
     id: 'durable-task-state' as const,
     name: 'Durable Task State',
@@ -57,6 +114,77 @@ export function durableTaskState() {
     },
     timeouts: {
       store: 30_000,
+    },
+    provides: {
+      recordArtifact: layerFn<
+        {
+          path: string;
+        },
+        string,
+        DurableTaskState
+      >({
+        description:
+          'Record a file this task produced or modified. Recorded paths survive the task boundary and merge back into the parent task.',
+        input: z.object({
+          path: z.string().min(1),
+        }),
+        output: z.string(),
+        execute: async (args, state) => {
+          if (state.files.includes(args.path)) {
+            return {
+              result: `Already recorded: ${args.path}`,
+              state,
+            };
+          }
+          return {
+            result: `Recorded artifact: ${args.path}`,
+            state: {
+              ...state,
+              files: [
+                ...state.files,
+                args.path,
+              ],
+            },
+          };
+        },
+      }),
+
+      setTaskData: layerFn<
+        {
+          key: string;
+          value: unknown;
+        },
+        string,
+        DurableTaskState
+      >({
+        description:
+          'Record a structured result for this task under a key (e.g. a PR url, a verdict, a summary). Values survive the task boundary and merge back into the parent task.',
+        input: z.object({
+          key: z.string().min(1),
+          value: z.unknown(),
+        }),
+        output: z.string(),
+        execute: async (args, state) => {
+          // `__outcome` is written by onComplete; letting the model set it would
+          // make the recorded outcome unreliable.
+          if (args.key === '__outcome') {
+            return {
+              result: 'Cannot set reserved key "__outcome".',
+              state,
+            };
+          }
+          return {
+            result: `Recorded ${args.key}.`,
+            state: {
+              ...state,
+              data: {
+                ...state.data,
+                [args.key]: args.value,
+              },
+            },
+          };
+        },
+      }),
     },
     hooks: {
       async init({ storage }) {
@@ -134,7 +262,7 @@ export function durableTaskState() {
         };
       },
 
-      async onReturn({ childState, parentState }) {
+      async onReturn({ childState, parentState, childCtx }) {
         // Merge child artifacts back to parent. The parent may have no state
         // (init-less / never-initialized) — seed an empty base so the child's
         // contribution is still merged rather than crashing.
@@ -155,15 +283,17 @@ export function durableTaskState() {
                 ...childState.files,
               ]),
             ],
-            data: {
-              ...parent.data,
-              ...childState.data,
-            },
+            data: mergeChildData({
+              parent,
+              childState,
+              childExecutionId: childCtx.executionId,
+              mergeData,
+            }),
           },
         };
       },
 
-      async onComplete({ state, outcome }) {
+      async onComplete({ state, outcome, ctx }) {
         if (!state) {
           return;
         }
@@ -178,7 +308,10 @@ export function durableTaskState() {
               ...state.checkpoints,
               {
                 timestamp: Date.now(),
-                depth: 0,
+                // The completing execution's own depth — a hardcoded 0 made
+                // every terminal checkpoint look root-level regardless of
+                // where the execution actually sat in the spawn tree.
+                depth: ctx.depth,
               },
             ]),
           },

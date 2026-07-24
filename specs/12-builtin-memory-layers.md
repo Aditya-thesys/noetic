@@ -270,7 +270,14 @@ interface DurableTaskState {
   data: Record<string, unknown>;
 }
 
-function durableTaskState(): MemoryLayer<DurableTaskState>
+type DurableTaskDataMerge = 'shallow' | 'namespace';
+
+interface DurableTaskStateOptions {
+  /** How `data` merges at a child boundary. Default: `'shallow'`. */
+  mergeData?: DurableTaskDataMerge;
+}
+
+function durableTaskState(opts?: DurableTaskStateOptions): MemoryLayer<DurableTaskState>
 ```
 
 | Property | Value |
@@ -280,6 +287,7 @@ function durableTaskState(): MemoryLayer<DurableTaskState>
 | **scope** | `'thread'` |
 | **budget** | `{ min: 100, max: 800 }` |
 | **timeouts** | `{ store: 30_000 }` |
+| **provides** | `recordArtifact`, `setTaskData` |
 | **hooks** | `init`, `recall`, `store`, `onSpawn`, `onReturn`, `onComplete` |
 
 **Behavior:**
@@ -287,10 +295,28 @@ function durableTaskState(): MemoryLayer<DurableTaskState>
 - `recall`: Renders the state as a `<task_state>` block in a `MessageItem` with `role: developer`, trimmed to the allocated budget — the oldest checkpoints are halved away while the render exceeds the budget, with a final closing-tag-preserving char-slice guard. A zero budget is fail-open (full render).
 - `store`: Appends a `{ timestamp, depth }` checkpoint per model call, capped at the newest **50** checkpoints.
 - `onSpawn`: **Always** provides child state (unlike other layers that may return `null`).
-- `onReturn`: Merges child files/checkpoints/data back into parent (checkpoints capped at 50 after the merge, newest kept).
-- `onComplete`: Final checkpoint with outcome label (capped).
+- `onReturn`: Merges child files/checkpoints/data back into parent (checkpoints capped at 50 after the merge, newest kept). `files` is a set union; `data` follows the configured merge strategy.
+- `onComplete`: Final checkpoint stamped with the completing execution's `ctx.depth`, plus the outcome label under `data.__outcome` (capped).
 
-**Key design:** Scope is `'thread'` so the state persists across executions/iterations within the same thread (an `'execution'` scope would rotate its key every run and defeat durable rehydration). Always crosses spawn boundaries. Recalls into the View so the LLM can see progress.
+**Write API (`provides`):** the layer is writable by the model, exposed as the tools `durable-task-state/recordArtifact` and `durable-task-state/setTaskData`.
+
+| Function | Input | Effect |
+|----------|-------|--------|
+| `recordArtifact` | `{ path: string }` | Appends `path` to `files`. Idempotent — recording the same path twice is a no-op. |
+| `setTaskData` | `{ key: string; value: unknown }` | Sets `data[key]`. Refuses the reserved key `__outcome`, which `onComplete` owns. |
+
+Without these, `files` and `data` would only ever be written by the framework, and a worker would have no way to report what it produced.
+
+**`data` merge strategies:**
+
+| Strategy | Merge | Use |
+|----------|-------|-----|
+| `'shallow'` (default) | `{ ...parent.data, ...childState.data }` | One child at a time. Concurrent children writing the same key clobber each other — last to return wins. |
+| `'namespace'` | `parent.data[childCtx.executionId] = childState.data` | Coordinator/worker fan-out. Each worker's result is preserved under its own execution id. |
+
+`onReturn` receives the child's `ExecutionContext` as `childCtx` (spec 11), which is what makes namespacing possible.
+
+**Key design:** Scope is `'thread'` so the state persists across executions/iterations within the same thread (an `'execution'` scope would rotate its key every run and defeat durable rehydration). Always crosses spawn boundaries — and fork boundaries, which run the same lifecycle (spec 03). Recalls into the View so the LLM can see progress.
 
 ---
 

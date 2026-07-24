@@ -127,6 +127,9 @@ describe('durableTaskState', () => {
     const result = await layer.hooks.onReturn!({
       childState,
       childLog: makeItemLog(),
+      childCtx: makeCtx({
+        executionId: 'child-1',
+      }),
       parentState,
       result: 'done',
     });
@@ -168,6 +171,9 @@ describe('durableTaskState', () => {
     const result = await layer.hooks.onReturn!({
       childState,
       childLog: makeItemLog(),
+      childCtx: makeCtx({
+        executionId: 'child-1',
+      }),
       parentState,
       result: 'done',
     });
@@ -221,6 +227,277 @@ describe('durableTaskState', () => {
     assert(result !== undefined);
     expect(result.state.data.__outcome).toBe('failure');
     expect(result.state.checkpoints).toHaveLength(2);
+  });
+
+  it('onComplete stamps the completing execution depth, not 0', async () => {
+    const layer = durableTaskState();
+    const result = await layer.hooks.onComplete!({
+      log: makeItemLog(),
+      ctx: makeCtx({
+        depth: 3,
+      }),
+      state: {
+        checkpoints: [],
+        files: [],
+        data: {},
+      },
+      outcome: 'success',
+    });
+    assert(result !== undefined);
+    expect(result.state.checkpoints[0].depth).toBe(3);
+  });
+
+  describe('write API (provides)', () => {
+    function emptyState(): DurableTaskState {
+      return {
+        checkpoints: [],
+        files: [],
+        data: {},
+      };
+    }
+
+    it('exposes recordArtifact and setTaskData as layer functions', () => {
+      const layer = durableTaskState();
+      assert(layer.provides !== undefined);
+      expect(layer.provides.recordArtifact.kind).toBe('function');
+      expect(layer.provides.setTaskData.kind).toBe('function');
+    });
+
+    it('recordArtifact appends a file path to state', async () => {
+      const layer = durableTaskState();
+      const { result, state } = await layer.provides.recordArtifact.execute(
+        {
+          path: 'src/a.ts',
+        },
+        emptyState(),
+        makeCtx(),
+      );
+      assert(state !== undefined);
+      expect(state.files).toEqual([
+        'src/a.ts',
+      ]);
+      expect(result).toContain('src/a.ts');
+    });
+
+    it('recordArtifact is idempotent for an already-recorded path', async () => {
+      const layer = durableTaskState();
+      const first = await layer.provides.recordArtifact.execute(
+        {
+          path: 'src/a.ts',
+        },
+        emptyState(),
+        makeCtx(),
+      );
+      assert(first.state !== undefined);
+      const second = await layer.provides.recordArtifact.execute(
+        {
+          path: 'src/a.ts',
+        },
+        first.state,
+        makeCtx(),
+      );
+      assert(second.state !== undefined);
+      expect(second.state.files).toHaveLength(1);
+      expect(second.result).toContain('Already recorded');
+    });
+
+    it('recordArtifact rejects an empty path via its input schema', () => {
+      const layer = durableTaskState();
+      const parsed = layer.provides.recordArtifact.input.safeParse({
+        path: '',
+      });
+      expect(parsed.success).toBe(false);
+    });
+
+    it('setTaskData records a structured value under a key', async () => {
+      const layer = durableTaskState();
+      const { state } = await layer.provides.setTaskData.execute(
+        {
+          key: 'pr',
+          value: {
+            url: 'https://example.test/pr/1',
+          },
+        },
+        emptyState(),
+        makeCtx(),
+      );
+      assert(state !== undefined);
+      expect(state.data.pr).toEqual({
+        url: 'https://example.test/pr/1',
+      });
+    });
+
+    it('setTaskData refuses the reserved __outcome key and leaves state untouched', async () => {
+      const layer = durableTaskState();
+      const before = emptyState();
+      const { result, state } = await layer.provides.setTaskData.execute(
+        {
+          key: '__outcome',
+          value: 'success',
+        },
+        before,
+        makeCtx(),
+      );
+      expect(result).toContain('reserved');
+      expect(state).toBe(before);
+    });
+
+    it('artifacts written by a child survive onReturn into the parent', async () => {
+      const layer = durableTaskState();
+      const childWithFile = await layer.provides.recordArtifact.execute(
+        {
+          path: 'worker.ts',
+        },
+        emptyState(),
+        makeCtx(),
+      );
+      assert(childWithFile.state !== undefined);
+      const childWithData = await layer.provides.setTaskData.execute(
+        {
+          key: 'verdict',
+          value: 'ok',
+        },
+        childWithFile.state,
+        makeCtx(),
+      );
+      assert(childWithData.state !== undefined);
+
+      const merged = await layer.hooks.onReturn!({
+        childState: childWithData.state,
+        childLog: makeItemLog(),
+        childCtx: makeCtx({
+          executionId: 'child-1',
+        }),
+        parentState: emptyState(),
+        result: 'done',
+      });
+      assert(merged !== undefined);
+      expect(merged.parentState.files).toEqual([
+        'worker.ts',
+      ]);
+      expect(merged.parentState.data.verdict).toBe('ok');
+    });
+  });
+
+  describe("mergeData: 'namespace' (fan-out)", () => {
+    function stateWithData(data: Record<string, unknown>): DurableTaskState {
+      return {
+        checkpoints: [],
+        files: [],
+        data,
+      };
+    }
+
+    it('namespaces each child under its execution id instead of clobbering', async () => {
+      const layer = durableTaskState({
+        mergeData: 'namespace',
+      });
+      const afterFirst = await layer.hooks.onReturn!({
+        childState: stateWithData({
+          result: 'from-worker-a',
+        }),
+        childLog: makeItemLog(),
+        childCtx: makeCtx({
+          executionId: 'worker-a',
+        }),
+        parentState: stateWithData({}),
+        result: 'done',
+      });
+      assert(afterFirst !== undefined);
+
+      const afterSecond = await layer.hooks.onReturn!({
+        childState: stateWithData({
+          result: 'from-worker-b',
+        }),
+        childLog: makeItemLog(),
+        childCtx: makeCtx({
+          executionId: 'worker-b',
+        }),
+        parentState: afterFirst.parentState,
+        result: 'done',
+      });
+      assert(afterSecond !== undefined);
+
+      // Both workers wrote `result`; neither contribution is lost.
+      expect(afterSecond.parentState.data['worker-a']).toEqual({
+        result: 'from-worker-a',
+      });
+      expect(afterSecond.parentState.data['worker-b']).toEqual({
+        result: 'from-worker-b',
+      });
+    });
+
+    it("shallow (default) loses the first worker's value for the same key", async () => {
+      const layer = durableTaskState();
+      const afterFirst = await layer.hooks.onReturn!({
+        childState: stateWithData({
+          result: 'from-worker-a',
+        }),
+        childLog: makeItemLog(),
+        childCtx: makeCtx({
+          executionId: 'worker-a',
+        }),
+        parentState: stateWithData({}),
+        result: 'done',
+      });
+      assert(afterFirst !== undefined);
+      const afterSecond = await layer.hooks.onReturn!({
+        childState: stateWithData({
+          result: 'from-worker-b',
+        }),
+        childLog: makeItemLog(),
+        childCtx: makeCtx({
+          executionId: 'worker-b',
+        }),
+        parentState: afterFirst.parentState,
+        result: 'done',
+      });
+      assert(afterSecond !== undefined);
+      expect(afterSecond.parentState.data.result).toBe('from-worker-b');
+    });
+
+    it('namespace mode still unions files and concatenates checkpoints', async () => {
+      const layer = durableTaskState({
+        mergeData: 'namespace',
+      });
+      const merged = await layer.hooks.onReturn!({
+        childState: {
+          checkpoints: [
+            {
+              timestamp: 2,
+              depth: 1,
+            },
+          ],
+          files: [
+            'b.ts',
+          ],
+          data: {},
+        },
+        childLog: makeItemLog(),
+        childCtx: makeCtx({
+          executionId: 'worker-a',
+        }),
+        parentState: {
+          checkpoints: [
+            {
+              timestamp: 1,
+              depth: 0,
+            },
+          ],
+          files: [
+            'a.ts',
+          ],
+          data: {},
+        },
+        result: 'done',
+      });
+      assert(merged !== undefined);
+      expect(merged.parentState.files).toEqual([
+        'a.ts',
+        'b.ts',
+      ]);
+      expect(merged.parentState.checkpoints).toHaveLength(2);
+    });
   });
 
   describe('checkpoint cap + budget-aware recall (M5)', () => {
@@ -283,6 +560,9 @@ describe('durableTaskState', () => {
           data: {},
         },
         childLog: makeItemLog(),
+        childCtx: makeCtx({
+          executionId: 'child-1',
+        }),
         parentState: {
           checkpoints: makeCheckpoints(40, 0),
           files: [],

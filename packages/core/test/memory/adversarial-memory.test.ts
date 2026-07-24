@@ -916,7 +916,7 @@ describe('Observational Memory: onSpawn ignores scope', () => {
 //#region Durable Task State: Depth Tracking
 
 describe('Durable Task State: onComplete checkpoint depth', () => {
-  it('[BUG] onComplete always records depth=0 regardless of actual depth', async () => {
+  it('onComplete records the completing execution depth', async () => {
     const layer = durableTaskState();
     const store = createLayerStateStore();
     const ctx = makeCtx({
@@ -946,9 +946,9 @@ describe('Durable Task State: onComplete checkpoint depth', () => {
     assert(isCheckpointState(result.state));
     const lastCheckpoint = result.state.checkpoints[result.state.checkpoints.length - 1];
 
-    // BUG: depth is hardcoded to 0 even though ctx.depth is 5
-    expect(lastCheckpoint.depth).toBe(0);
-    expect(lastCheckpoint.depth).not.toBe(5);
+    // Previously hardcoded to 0, which made max(checkpoints[].depth) useless
+    // as a depth signal for nested executions.
+    expect(lastCheckpoint.depth).toBe(5);
   });
 
   it('store hook correctly uses ctx.depth from execution context', async () => {

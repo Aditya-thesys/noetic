@@ -885,6 +885,7 @@ export async function returnLayers<T>({
           childLog,
           parentState,
           result: currentResult,
+          childCtx,
         }),
         timeout,
       );

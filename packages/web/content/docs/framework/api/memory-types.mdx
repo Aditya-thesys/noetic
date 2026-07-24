@@ -169,6 +169,7 @@ interface MemoryHooks<TState = unknown> {
 | `childLog` | `ItemLog` | Child's conversation log |
 | `parentState` | `TState` | Parent's current state |
 | `result` | `unknown` | Child's completion result |
+| `childCtx` | `ExecutionContext` | The child's execution context — the same one `onSpawn` received. Namespace merges by `childCtx.executionId` when several children return into one parent. |
 
 ### ReturnResult
 

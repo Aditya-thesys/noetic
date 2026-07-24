@@ -213,6 +213,7 @@ The runtime applies these invariants uniformly across the lifecycle:
 - **Disabled-layer skip.** A layer whose `init` threw with `onInitError: 'disable'` is marked disabled via an **explicit flag** on the layer state store (`disable`/`isDisabled`) and is skipped by *every* later hook — `recall`, `store`, `onSpawn`, `onComplete`, `dispose`, `onItemAppend`, `projectHistory`, `beforeToolCall`, `afterModelCall`. The flag — not the absence of state — is the disabled signal, so a layer that legitimately cleared its state keeps running (its hooks receive `undefined` state). The store distinguishes the two via `has` (any state entry, including an explicit `undefined`): an init-bearing layer with **no entry at all** was never initialized for the execution (e.g. a bare `harness.run()` outside a session) and is skipped — its hooks MUST NOT run with `undefined` state, since init never seeded the state they were written against. A custom state store without explicit tracking falls back to the legacy sentinel (init-bearing layer with no state), which cannot make the cleared/uninitialized distinction.
 - **State clearing.** `store` (and `onComplete`) detect the returned object with `'state' in result`, not `result.state !== undefined`, so a layer MAY clear its state by returning `{ state: undefined }`. Clearing deletes the durable key, so the next execution's `init` sees no saved state and falls back to its default. Clearing does NOT disable the layer.
 - **`onReturn` requirements.** Only the *child*'s state is required to merge. A parent that never initialized state can still be seeded from the child; `onReturn` is skipped only when the child produced no state.
+- **Child boundaries.** Both `spawn` (spec 04) and each `fork` path (spec 03) are child executions and run the `onSpawn`/`onReturn` pair. Fork paths merge one at a time even when they execute concurrently, so each merge sees the previous path's contribution.
 - **`onSpawn` for init-less layers.** `onSpawn` runs for layers with no `init` hook (state legitimately `undefined`), consistent with `recall`. Only disabled layers (init present, no state) are skipped.
 
 ---
@@ -327,6 +328,13 @@ interface ReturnParams<TState> {
   childLog: ItemLog;
   parentState: TState;
   result: unknown;
+  /**
+   * The child's execution context — the same one passed to `onSpawn`. Layers
+   * merging several concurrent children (fan-out) namespace by
+   * `childCtx.executionId` instead of letting the last child to return
+   * overwrite its siblings.
+   */
+  childCtx: ExecutionContext;
 }
 
 interface ReturnResult<TState> {

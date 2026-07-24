@@ -18,9 +18,14 @@ Durable Task State tracks checkpoints, file artifacts, and arbitrary key-value d
 import { durableTaskState } from '@noetic-tools/core';
 
 const layer = durableTaskState();
+
+// Fan-out: keep every worker's `data` instead of last-writer-wins.
+const coordinatorLayer = durableTaskState({ mergeData: 'namespace' });
 ```
 
-The factory takes no configuration.
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `mergeData` | `'shallow' \| 'namespace'` | `'shallow'` | How a child's `data` merges into the parent at a spawn/fork boundary. |
 
 ## State Type
 
@@ -64,11 +69,26 @@ Deep-clones the parent state to the child. Unlike other layers, Durable Task Sta
 Merges child artifacts back into the parent:
 - Checkpoints are concatenated (capped at the newest 50 after the merge)
 - File lists are deduplicated via `Set`
-- Data objects are shallow-merged (child keys overwrite parent keys)
+- Data objects merge per `mergeData`:
+  - `'shallow'` (default) -- `{ ...parent.data, ...child.data }`. With several children running concurrently, two workers writing the same key means the last one to return wins.
+  - `'namespace'` -- the child's whole `data` map is stored under its execution id (`parent.data[childExecutionId]`), so no worker's result is lost.
+
+Each forked path is a child boundary too, so the same merge runs for `fork` as for `spawn`. Paths merge one at a time, and a failed path is not merged.
 
 ### onComplete
 
-Records the execution outcome (`'success'`, `'failure'`, or `'aborted'`) in `data.__outcome` and appends a final checkpoint.
+Records the execution outcome (`'success'`, `'failure'`, or `'aborted'`) in `data.__outcome` and appends a final checkpoint stamped with the completing execution's depth.
+
+## Writing to the layer
+
+The layer exposes two functions to the model as tools, so an agent can report what it produced. They are also callable from code via `ctx.memory['durable-task-state']`.
+
+| Tool | Input | Effect |
+|---|---|---|
+| `durable-task-state/recordArtifact` | `{ path: string }` | Appends a file path to `files`. Recording the same path twice is a no-op. |
+| `durable-task-state/setTaskData` | `{ key: string, value: unknown }` | Sets `data[key]`. The reserved key `__outcome` is refused -- `onComplete` owns it. |
+
+Anything recorded this way crosses the child boundary: a spawned worker's artifacts merge back into the coordinator when the worker returns.
 
 ## StorageAdapter
 

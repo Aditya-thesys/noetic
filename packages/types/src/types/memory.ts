@@ -225,6 +225,13 @@ export interface ReturnParams<TState> {
   childLog: ItemLog;
   parentState: TState;
   result: unknown;
+  /**
+   * The child's execution context — the same one passed to `onSpawn`. Layers
+   * that merge artifacts from several concurrent children (fan-out) use
+   * `childCtx.executionId` to namespace the child's contribution instead of
+   * letting the last child to return silently overwrite its siblings.
+   */
+  childCtx: ExecutionContext;
 }
 
 /** @public Value returned by a memory layer's `onReturn` hook with the merged parent state. */

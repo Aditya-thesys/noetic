@@ -421,6 +421,7 @@ describe('spawn boundaries', () => {
     const merged = await onReturn({
       childState,
       childLog: makeItemLog(),
+      childCtx: makeExecCtx(),
       parentState: withInteraction,
       result: undefined,
     });
