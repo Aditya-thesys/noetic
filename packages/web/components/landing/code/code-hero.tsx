@@ -8,18 +8,23 @@ import { NoeticTuiPreview } from '@/components/landing/code/noetic-tui-preview';
 import { CyclingCommand } from '@/components/landing/cycling-command';
 import { GITHUB_URL } from '@/lib/tui-theme';
 
+// Shape matches CyclingCommand's InstallCommand: it renders the `$ ` prompt
+// itself, then manager / verb / pkg in their own colours.
 const INSTALL_COMMANDS = [
   {
-    prefix: '$ npm i -g ',
-    package: '@noetic-tools/cli',
+    manager: 'npm',
+    verb: 'i -g',
+    pkg: '@noetic-tools/cli',
   },
   {
-    prefix: '$ bun add -g ',
-    package: '@noetic-tools/cli',
+    manager: 'bun',
+    verb: 'add -g',
+    pkg: '@noetic-tools/cli',
   },
   {
-    prefix: '$ pnpm add -g ',
-    package: '@noetic-tools/cli',
+    manager: 'pnpm',
+    verb: 'add -g',
+    pkg: '@noetic-tools/cli',
   },
 ] as const;
 
@@ -213,8 +218,8 @@ export function CodeHero(): ReactNode {
               }}
             >
               A coding agent with a real context manager and background teammates — in your
-              terminal, on your desktop, and in your pocket. Quality holds on long tasks. Never
-              hits a context limit.
+              terminal, on your desktop, and in your pocket. Quality holds on long tasks. Never hits
+              a context limit.
             </motion.p>
 
             <motion.p
@@ -235,8 +240,8 @@ export function CodeHero(): ReactNode {
               }}
             >
               Ten memory layers in concert. Detached agents in isolated worktrees. Per-phase model
-              routing — not married to any provider. Durable cloud sessions you can pick up from
-              any device.
+              routing — not married to any provider. Durable cloud sessions you can pick up from any
+              device.
             </motion.p>
 
             <motion.div

@@ -13,7 +13,8 @@
     "gen:doc-preamble": "bun scripts/gen-doc-preamble.ts",
     "sync-tui": "bun scripts/sync-tui.ts",
     "sync-tui:chrome": "bun scripts/sync-tui.ts --chrome-only",
-    "sync-tui:check": "bun scripts/sync-tui.ts --check"
+    "sync-tui:check": "bun scripts/sync-tui.ts --check",
+    "typecheck": "fumadocs-mdx && tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json"
   },
   "dependencies": {
     "fumadocs-core": "16.6.17",
@@ -29,6 +30,7 @@
     "@types/node": "25.5.0",
     "@types/react": "19.1.6",
     "@types/react-dom": "19.1.6",
+    "bun-types": "latest",
     "kiira": "0.3.0",
     "kiira-core": "0.3.0",
     "postcss": "8.5.4",

@@ -1,0 +1,18 @@
+{
+  // The Bun tooling scripts (`check:docs`, `gen:doc-preamble`, `sync-tui`) run
+  // under Bun, not Next, so they need `bun-types` for `Bun.*` and
+  // `import.meta.dir`. They are excluded from the app config — pulling
+  // bun-types into it would apply Bun's globals to browser code.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "bun-types"
+    ]
+  },
+  "include": [
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
