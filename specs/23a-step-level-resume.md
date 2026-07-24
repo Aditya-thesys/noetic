@@ -1,0 +1,142 @@
+# Step-Level Resume
+
+> **Status:** DESIGN — not implemented. This spec proposes the mechanism; nothing described under "Design" exists in `packages/core` today.
+> **Depends On:** `23-durable-execution` (CheckpointSnapshot, CheckpointStore, restore flow), `01-step-type` (Step), `03-control-flow` (fork/branch), `05-loop-and-until` (loop, every), `07-context-and-event-log` (Context, ItemLog)
+> **Exports (proposed):** `StepLedgerEntry`, `StepLedgerEntrySchema`, `stepPathKey`, `CheckpointSchemaVersion = 2`
+> **Source of truth (proposed):** `packages/core/src/runtime/durable/step-ledger.ts`, `packages/core/src/interpreter/execute.ts`, `packages/core/src/runtime/durable/harness-checkpoints.ts`, `packages/core/src/types/checkpoint.ts`
+
+---
+
+## Problem
+
+`23-durable-execution` delivers context reconstruction: `harness.restore(executionId)` rebuilds an execution's item log, layer state, cwd, and identity. It deliberately stops there — "the caller resumes execution from whatever the frontier requires … for an interactive agent, this is typically re-issuing the most recent user turn."
+
+Re-issuing the turn is acceptable when a turn is one LLM call. It is not acceptable when a turn fans out to N workers that each do externally-visible work. A host with at-least-once turn delivery (the Noetic platform's session DO is one) re-runs the whole turn after a crash, and every worker that already finished runs a second time.
+
+The gap is that a restored context knows *what happened* but not *how far it got*.
+
+## Prerequisite: the checkpoint firing boundaries do not exist
+
+`23-durable-execution` § "Checkpoint lifecycle → Firing boundaries" states that `harness.checkpoint(ctx)` fires automatically at four points (post-`execute()`, post-`detachedSpawn()`, ask-user enqueue, post-`runAppendPipeline`).
+
+None of them are wired. In the current implementation:
+
+- `ContextImpl` accepts an optional `checkpointFn` (`runtime/context-impl.ts:105`) and `ctx.checkpoint()` calls it (`:206`), but **no construction site supplies it** — not `agent-harness.ts:696` (`createContext`), not `execute-action.ts:816` (spawn child), not `execute-control.ts:63` (fork child). `ctx.checkpoint()` is therefore a permanent no-op.
+- No module in `packages/core/src` calls `harness.checkpoint(ctx)`. The only definition is the method itself (`agent-harness.ts:925`).
+
+So today a snapshot exists only if the host calls `harness.checkpoint(ctx)` by hand. **Wiring the four boundaries is prerequisite work for everything below**, and is worth landing on its own — it makes `23`'s existing promises true regardless of whether this spec proceeds.
+
+## Why the frontier is not sufficient
+
+`captureCheckpoint` serialises the frontier (`harness-checkpoints.ts:51`); `restoreFromCheckpoint` never reads it back. Restoring it would not be enough anyway, for two reasons.
+
+**The frontier records what is in flight, not what finished.** `execute()` pushes a frame before dispatch (`execute.ts:240`) and pops it in a `finally` (`:302`). A completed step leaves no trace. For a fork of 8 workers where 5 finished and 3 were mid-flight at snapshot time, the frontier holds the fork plus the 3 — the 5 completed ones are invisible.
+
+**Skipping is not enough; the output is load-bearing.** Steps consume the previous step's output. An `llm` step is non-deterministic, so re-running it to "catch up" produces a different value than the one the rest of the run already observed. Resume therefore has to *replay recorded outputs*, not skip work. It is memoization, not fast-forward.
+
+## Design
+
+### The ledger
+
+One entry per successfully completed step, carried in the snapshot.
+
+```typescript
+interface StepLedgerEntry {
+  path: string;          // execution path key — see below
+  stepId: string;
+  kind: Step['kind'];
+  output: unknown;       // replayed verbatim on resume
+  completedAt: string;   // ISO-8601
+}
+```
+
+Failures are **not** recorded: a step that threw re-runs. Retry policies and `onError` handling stay exactly as they are today.
+
+### Identity: the execution path key
+
+`stepId` alone cannot key the ledger. A loop re-executes its body steps under the same ids on every iteration (`execute-control.ts:640` — `for (const bodyStep of step.steps)` inside `while (true)`), and `every` does the same on a timer. Keying by `stepId` would let iteration 1's output replay into iteration 2.
+
+Dynamic forks are already safe by accident: `buildPerItemStep` suffixes both the wrapper id and the template's node ids with the item index (`workflow-hydrator.ts:688`, `:691`), so `fan-item-0` and `fan-item-1` are distinct. Static forks and loops have no such disambiguation.
+
+The key is the frontier stack plus a per-parent occurrence ordinal:
+
+```
+root/plan#0/review-loop#0/body-llm#2
+```
+
+`#n` is the n-th time that `stepId` has been dispatched under that parent frame. Derivation is nearly free — `execute()` already maintains the stack; the addition is an occurrence counter per `(parent frame, child stepId)` pair, incremented at `enterStep`.
+
+**Determinism requirement.** The key must be identical on replay given identical control flow. Sequential constructs satisfy this trivially. Concurrent fork paths do **not** if the ordinal is assigned on completion — completion order varies run to run. Assign the ordinal from the `paths` array index at dispatch (`execute-control.ts:221`), never from settle order.
+
+### Recording
+
+Append on successful return, at the point `step_completed` is emitted (`execute.ts:306`) — *not* in the `finally` that pops the frontier, which also runs on failure.
+
+### Replay
+
+On `restore`, the ledger is loaded into the context. In `execute()`, before dispatch:
+
+1. Compute the path key.
+2. If an entry exists at that key **and** its `stepId` and `kind` match the step about to run, return `entry.output` without dispatching.
+3. If an entry exists but diverges (different `stepId` or `kind` at that path), discard it and every entry whose path has it as a prefix, then run fresh.
+
+Divergence handling mirrors the platform's tool fence, which found the same problem one layer up: `turn-tool-fencing.ts` matches a recorded call on name **and** args hash and re-executes on any mismatch, because a model that rewrote the call invalidated the prior attempt's record.
+
+Replayed steps should emit a distinct `step_replayed` framework event rather than a synthetic `step_started`/`step_completed` pair, so traces and any attached UI can tell a resumed run from a fresh one instead of showing work that never happened.
+
+### What must not be memoized
+
+- **`every`** — a wall-clock scheduled step; replaying its output would collapse a schedule into a value.
+- **Steps whose value *is* the effect**, where the effect is not durable.
+- An explicit opt-out (`step.durable === false`) for authors who know their step must always run. No such field exists on `Step` today; it would be additive.
+
+## The side-effect boundary
+
+Memoizing an output replays a step's **value**, not its **effect**. A `run` node that wrote a file, or a `tool` step that opened a PR, returns its recorded output on replay while the effect is not redone. That is correct only if the effect was durable at the moment it happened.
+
+This is the same bet the Noetic platform's turn fence already makes, and the reason that fence sits at the **tool** boundary: tools are where effects live. That fence records a durable `tool.call_started` row *before* dispatch, so a crash mid-call is recoverable as a loud unknown-outcome rather than a silent re-run.
+
+**Recommendation: core's ledger covers control flow and `llm` steps; effects stay fenced at the tool/host boundary.** Core should not claim exactly-once for tool execution — it has no durable pre-dispatch record and no way to know whether a given tool is idempotent. Stating this explicitly matters, because "durable execution" invites the assumption that side effects are covered.
+
+## Interaction with memory layers
+
+Layer state is already snapshotted (`layers`, keyed by `layerId`) and replayed into `layerStateStore` on restore. A replayed `llm` step must therefore **bypass the layer lifecycle entirely** — no recall, no store, no append pipeline. Re-running `store` hooks against restored state would double-fold every observation the pre-crash run already folded.
+
+The ledger and the layer snapshot must be captured atomically or they drift: a ledger newer than the layer state would replay steps whose folds are missing. Both live in one `CheckpointSnapshot` written through a single `StorageAdapter.set()`, so a single-key snapshot preserves this for free. **Sharding the ledger (below) breaks that atomicity** and needs an explicit ordering rule — write the ledger shard first, the snapshot second, and treat ledger entries beyond the snapshot's high-water mark as untrusted.
+
+## Schema and migration
+
+Bump `CheckpointSchemaVersion` to `2`, adding `ledger: StepLedgerEntry[]`.
+
+`23` specifies that `schemaVersion` is a literal and a mismatch throws `CHECKPOINT_SCHEMA_MISMATCH`, pointing the caller at `clear()`. That rule is right for genuinely incompatible changes, but discarding a v1 snapshot here loses item log, layer state, and cwd to gain a field whose absence is meaningful. **Recommend a v1→v2 migration that injects `ledger: []`**: a v1 snapshot then restores exactly as it does today and simply resumes nothing, which is precisely current behaviour.
+
+## Size and retention
+
+This is the part most likely to bite. Snapshots are keyed by `executionId` under a single key and **overwritten in full** on every capture (`23` § Idempotency). Adding step outputs makes each write proportional to the run so far: a 200-step run averaging 4 KB of output per step writes ~800 KB on its final capture, and rewrites the growing blob on every step — O(n²) bytes over the run.
+
+Mitigations, in preference order:
+
+1. **Shard the ledger** under its own key(s). `CheckpointKeys` already reserves auxiliary suffixes, and `23` states that sharding "can be added without bumping `schemaVersion`". Append-only ledger writes make each capture O(1). Accept the atomicity cost documented above.
+2. **Cap per-entry size**, spilling oversized outputs to a content-addressed side key or dropping the entry (a dropped entry re-runs its step — degradation, not corruption).
+3. **Cap total entries**, evicting oldest first, so resume is best-effort over a bounded suffix of the run.
+
+## Open questions
+
+1. **`race` losers.** Losing paths are cancelled mid-flight. Do they record partial entries, and does a replayed race re-pick the same winner? Recommend recording only the winner and treating the race as a single memoized unit.
+2. **`spawn` namespacing.** A spawn child gets its own `ContextImpl` with a fresh `id` (`execute-action.ts:816`). Does its ledger live under the child's execution id or under the parent path? Under the child id, a resumed parent will re-run the whole spawn unless the parent's ledger records the spawn's output — which it does, so the child's own ledger is only useful for resuming *inside* an interrupted spawn.
+3. **Framework event replay.** Silent replay keeps traces honest but leaves a resumed UI blank for work that "already happened". `step_replayed` (above) is the proposed middle path; the UI contract needs a decision.
+4. **Cross-harness boundaries.** Where a host builds a separate harness per sub-agent (the platform does), each gets its own execution id and ledger. A resumed parent will not skip a completed sub-agent through core's ledger alone — that must be fenced at the host's tool boundary. The platform already does this, which is why its fan-out is re-run safe today without any of this machinery.
+
+## Test plan
+
+- Loop body: two iterations, crash after iteration 2, resume replays both iterations' outputs in order and does not re-dispatch either.
+- Static fork: 5 paths, crash with 3 complete; resume replays 3, dispatches 2.
+- Divergence: ledger entry at a path whose `stepId` changed → entry and its subtree discarded, step runs fresh.
+- Concurrent ordinal stability: a fork whose paths settle in a different order across runs produces identical path keys.
+- Non-determinism: an `llm` step with a scripted model returning different values per call; resume must surface the *recorded* value downstream.
+- Layer non-double-fold: a folding layer plus a replayed step; layer state after resume equals layer state before crash.
+- v1 snapshot loads under v2 with an empty ledger and resumes nothing.
+
+## Sizing
+
+Prerequisite (wire the four firing boundaries) is small and independently valuable. The ledger itself is a moderate change concentrated in `execute()`, `harness-checkpoints.ts`, and the checkpoint schema, plus a new `step-ledger.ts`. The path-key work touches `ContextImpl`'s frontier bookkeeping and the fork dispatch site. The retention work (sharding) is the piece most likely to expand, and is the one worth prototyping first, since a design that is correct but writes O(n²) bytes will not ship.
