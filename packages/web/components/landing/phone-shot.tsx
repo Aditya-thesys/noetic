@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import type { ReactNode } from 'react';
 
 interface PhoneShotProps {
@@ -30,8 +31,9 @@ export function PhoneShot({ src, alt, caption, width = 250 }: PhoneShotProps): R
           boxShadow: '0 0 40px rgba(57, 255, 20, 0.07)',
         }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        {/* Intrinsic size of the iOS screenshots; the style below scales them
+            to the phone frame while `next/image` serves an optimised source. */}
+        <Image
           src={src}
           alt={alt}
           width={554}

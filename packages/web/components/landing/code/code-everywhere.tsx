@@ -126,146 +126,146 @@ export function CodeEverywhere(): ReactNode {
           marginBottom: '32px',
         }}
       >
-      <motion.div
-        initial={{
-          opacity: 0,
-          y: 12,
-        }}
-        whileInView={{
-          opacity: 1,
-          y: 0,
-        }}
-        transition={{
-          duration: 0.5,
-        }}
-        viewport={{
-          once: true,
-        }}
-        style={{
-          background: 'var(--color-tui-bg-deep)',
-          border: '1px solid var(--color-tui-border-bright)',
-          borderRadius: '6px',
-          overflow: 'hidden',
-          flex: '1 1 480px',
-          minWidth: 0,
-        }}
-      >
-        <div
+        <motion.div
+          initial={{
+            opacity: 0,
+            y: 12,
+          }}
+          whileInView={{
+            opacity: 1,
+            y: 0,
+          }}
+          transition={{
+            duration: 0.5,
+          }}
+          viewport={{
+            once: true,
+          }}
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '10px 14px',
-            borderBottom: '1px solid var(--color-tui-border)',
-            background: 'var(--color-tui-surface-2)',
-            fontSize: '11px',
-            color: 'var(--color-tui-secondary)',
-            letterSpacing: '0.06em',
+            background: 'var(--color-tui-bg-deep)',
+            border: '1px solid var(--color-tui-border-bright)',
+            borderRadius: '6px',
+            overflow: 'hidden',
+            flex: '1 1 480px',
+            minWidth: 0,
           }}
         >
-          <LiveDot state="running" size={6} />
-          <span>session: billing-migration</span>
-          <span
+          <div
             style={{
-              marginLeft: 'auto',
-              color: 'var(--color-tui-muted)',
-              fontSize: '10px',
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 14px',
+              borderBottom: '1px solid var(--color-tui-border)',
+              background: 'var(--color-tui-surface-2)',
+              fontSize: '11px',
+              color: 'var(--color-tui-secondary)',
+              letterSpacing: '0.06em',
             }}
           >
-            one durable session — three devices
-          </span>
-        </div>
-
-        <div
-          style={{
-            position: 'relative',
-          }}
-        >
-          <span
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              left: '21px',
-              top: '18px',
-              bottom: '18px',
-              width: '1px',
-              background: 'var(--color-tui-border-bright)',
-            }}
-          />
-          {HANDOFF.map((step, i) => (
-            <motion.div
-              key={step.time}
-              initial={{
-                opacity: 0,
-              }}
-              whileInView={{
-                opacity: 1,
-              }}
-              transition={{
-                delay: i * 0.06,
-                duration: 0.3,
-              }}
-              viewport={{
-                once: true,
-              }}
+            <LiveDot state="running" size={6} />
+            <span>session: billing-migration</span>
+            <span
               style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                gap: '14px',
-                padding: '12px 16px 12px 38px',
-                borderBottom:
-                  i === HANDOFF.length - 1 ? 'none' : '1px solid var(--color-tui-border)',
-                fontSize: '13px',
-                position: 'relative',
+                marginLeft: 'auto',
+                color: 'var(--color-tui-muted)',
+                fontSize: '10px',
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
               }}
             >
-              <span
-                aria-hidden="true"
-                style={{
-                  position: 'absolute',
-                  left: '18px',
-                  top: '17px',
-                  width: '7px',
-                  height: '7px',
-                  borderRadius: '50%',
-                  background: step.color,
+              one durable session — three devices
+            </span>
+          </div>
+
+          <div
+            style={{
+              position: 'relative',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: '21px',
+                top: '18px',
+                bottom: '18px',
+                width: '1px',
+                background: 'var(--color-tui-border-bright)',
+              }}
+            />
+            {HANDOFF.map((step, i) => (
+              <motion.div
+                key={step.time}
+                initial={{
+                  opacity: 0,
                 }}
-              />
-              <span
+                whileInView={{
+                  opacity: 1,
+                }}
+                transition={{
+                  delay: i * 0.06,
+                  duration: 0.3,
+                }}
+                viewport={{
+                  once: true,
+                }}
                 style={{
-                  color: 'var(--color-tui-muted)',
-                  fontSize: '11px',
-                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: '14px',
+                  padding: '12px 16px 12px 38px',
+                  borderBottom:
+                    i === HANDOFF.length - 1 ? 'none' : '1px solid var(--color-tui-border)',
+                  fontSize: '13px',
+                  position: 'relative',
                 }}
               >
-                {step.time}
-              </span>
-              <span
-                style={{
-                  color: 'var(--color-tui-cyan)',
-                  fontSize: '11px',
-                  letterSpacing: '0.12em',
-                  textTransform: 'uppercase',
-                  width: '72px',
-                  flexShrink: 0,
-                }}
-              >
-                {step.device}
-              </span>
-              <span
-                style={{
-                  color: 'var(--color-tui-secondary)',
-                  lineHeight: 1.5,
-                }}
-              >
-                {step.line}
-              </span>
-            </motion.div>
-          ))}
-        </div>
-      </motion.div>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute',
+                    left: '18px',
+                    top: '17px',
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '50%',
+                    background: step.color,
+                  }}
+                />
+                <span
+                  style={{
+                    color: 'var(--color-tui-muted)',
+                    fontSize: '11px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {step.time}
+                </span>
+                <span
+                  style={{
+                    color: 'var(--color-tui-cyan)',
+                    fontSize: '11px',
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    width: '72px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {step.device}
+                </span>
+                <span
+                  style={{
+                    color: 'var(--color-tui-secondary)',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {step.line}
+                </span>
+              </motion.div>
+            ))}
+          </div>
+        </motion.div>
 
         <PhoneShot
           src="/screenshots/ios-new-chat.png"
@@ -378,8 +378,8 @@ export function CodeEverywhere(): ReactNode {
           lineHeight: 1.6,
         }}
       >
-        The computer is your choice too: each session gets a persistent Linux microVM in the cloud
-        — or point it at your own machine with{' '}
+        The computer is your choice too: each session gets a persistent Linux microVM in the cloud —
+        or point it at your own machine with{' '}
         <code
           style={{
             color: 'var(--color-tui-cyan)',

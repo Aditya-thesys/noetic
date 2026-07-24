@@ -2,8 +2,8 @@
 
 import { motion } from 'motion/react';
 import Link from 'next/link';
-import { PhoneShot } from '@/components/landing/phone-shot';
 import type { ReactNode } from 'react';
+import { PhoneShot } from '@/components/landing/phone-shot';
 
 interface FeatureTile {
   name: string;
@@ -218,9 +218,9 @@ export function PlatformInside(): ReactNode {
               maxWidth: '420px',
             }}
           >
-            Chat, projects, agents, automations, and secrets ship in native iOS and macOS apps —
-            the same live sessions as the web dashboard and the terminal. Describe an automation
-            in a sentence from your phone; the platform drafts the plan.
+            Chat, projects, agents, automations, and secrets ship in native iOS and macOS apps — the
+            same live sessions as the web dashboard and the terminal. Describe an automation in a
+            sentence from your phone; the platform drafts the plan.
           </p>
         </div>
         <div

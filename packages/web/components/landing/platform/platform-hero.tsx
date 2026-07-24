@@ -202,8 +202,8 @@ export function PlatformHero(): ReactNode {
                 lineHeight: 1.65,
               }}
             >
-              The holistic agent platform. Build agents in TypeScript or plain language — then
-              run, observe, prove, improve, and operate them without ever leaving the stack.
+              The holistic agent platform. Build agents in TypeScript or plain language — then run,
+              observe, prove, improve, and operate them without ever leaving the stack.
             </motion.p>
 
             <motion.p
@@ -224,8 +224,8 @@ export function PlatformHero(): ReactNode {
               }}
             >
               Durable sessions in the cloud or on your own machines. Evals against real traces.
-              GEPA-based self-improvement. Connectors, permissions, metering — even billing your
-              own customers, if you want it.
+              GEPA-based self-improvement. Connectors, permissions, metering — even billing your own
+              customers, if you want it.
             </motion.p>
 
             <motion.div

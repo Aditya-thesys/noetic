@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { CodeBackgroundAgents } from '@/components/landing/code/code-background-agents';
 import { CodeBenchmarks } from '@/components/landing/code/code-benchmarks';
-import { CodeEverywhere } from '@/components/landing/code/code-everywhere';
 import { CodeContextManager } from '@/components/landing/code/code-context-manager';
+import { CodeEverywhere } from '@/components/landing/code/code-everywhere';
 import { CodeHero } from '@/components/landing/code/code-hero';
 import { CodeMultiModel } from '@/components/landing/code/code-multi-model';
 import { Footer } from '@/components/landing/footer';
