@@ -509,7 +509,13 @@ describe('planMemory layer', () => {
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const node = makeFlowNode();
-      const result = await fn.execute(node, makePlanningState(), makeCtx());
+      const result = await fn.execute(
+        {
+          tree: node,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
       const state = planState(result.state);
       expect(state.planTree).toEqual(node);
     });
@@ -518,7 +524,13 @@ describe('planMemory layer', () => {
       const layer = planMemory();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
-      const result = await fn.execute(makeFlowNode(), makeExecutingState(), makeCtx());
+      const result = await fn.execute(
+        {
+          tree: makeFlowNode(),
+        },
+        makeExecutingState(),
+        makeCtx(),
+      );
       expect(result.result).toContain('Cannot set plan tree');
     });
 
@@ -542,7 +554,13 @@ describe('planMemory layer', () => {
         ],
         'root',
       );
-      const result = await fn.execute(deepTree, makePlanningState(), makeCtx());
+      const result = await fn.execute(
+        {
+          tree: deepTree,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
       expect(result.result).toContain('exceeds maximum depth');
     });
 
@@ -561,7 +579,13 @@ describe('planMemory layer', () => {
         ],
         'root',
       );
-      const result = await fn.execute(shallowTree, makePlanningState(), makeCtx());
+      const result = await fn.execute(
+        {
+          tree: shallowTree,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
       expect(result.result).toContain('successfully');
     });
 
@@ -573,7 +597,13 @@ describe('planMemory layer', () => {
       assert(fn.kind === 'function');
       // Bare leaf → depth 0, below boundary.
       const leafTree = makeFlowNode();
-      const result = await fn.execute(leafTree, makePlanningState(), makeCtx());
+      const result = await fn.execute(
+        {
+          tree: leafTree,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
       expect(result.result).toContain('successfully');
     });
   });

@@ -100,7 +100,17 @@ describe('AUDIT: planMemory', () => {
         )
       ).state,
     );
-    s = planState((await setTree.execute(makeFlowNode(), s, makeCtx())).state);
+    s = planState(
+      (
+        await setTree.execute(
+          {
+            tree: makeFlowNode(),
+          },
+          s,
+          makeCtx(),
+        )
+      ).state,
+    );
     s = planState(
       (
         await exit.execute(

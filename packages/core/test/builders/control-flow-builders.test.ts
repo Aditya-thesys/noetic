@@ -98,9 +98,11 @@ describe('fork builder', () => {
 
   it('throws when all mode lacks merge', () => {
     expect(() =>
-      // @ts-expect-error — intentionally passing invalid opts to test runtime validation
       fork<ContextMemory, string, string>({
         id: 'test',
+        // @ts-expect-error — a merge-less fork falls through to the `settle`
+        // overload, so the mismatch surfaces here; runtime validation is what
+        // this test is asserting.
         mode: 'all',
         paths: () => [],
       }),
