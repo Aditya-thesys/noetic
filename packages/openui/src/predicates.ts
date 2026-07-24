@@ -2,7 +2,7 @@
  * Loop termination predicates over the UI surface. `Until` predicates receive
  * only a `Snapshot`, so each predicate closes over the surface layer instance
  * and reads its live state mirror — making the interaction loop plain
- * composition: `loop({ body, until: ui.submitted(surface, 'checkout-form') })`.
+ * composition: `loop({ id, steps, until: ui.submitted(surface, 'checkout-form') })`.
  */
 
 import type { Snapshot, Verdict } from '@noetic-tools/types';

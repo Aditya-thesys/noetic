@@ -24,7 +24,9 @@ const dashboard = step.llm<ContextMemory, string, unknown>({
   output: openUi(library), // ← the model emits OpenUI Lang; the step returns a UiDocument
 });
 
-const harness = new AgentHarness({ name: 'ui-agent', initialStep: dashboard, params: {} });
+// A UI step returns a UiDocument, not a string, so it is run directly rather
+// than being installed as the harness's `initialStep` (which is string → string).
+const harness = new AgentHarness({ name: 'ui-agent', params: {} });
 const ctx = harness.createContext();
 const doc = await harness.run(dashboard, 'Show a welcome card', ctx);
 ```
@@ -69,13 +71,14 @@ Install `openUiSurface()` as a memory layer to make the server the owner of UI s
 
 ```ts
 import { AgentHarness } from '@noetic-tools/core';
-import { openUi, openUiSurface } from '@noetic-tools/openui';
+import { openUiSurface, type UiLibrary } from '@noetic-tools/openui';
+
+declare const library: UiLibrary;
 
 const surface = openUiSurface({ library });
 
 const harness = new AgentHarness({
   name: 'ui-agent',
-  initialStep: dashboard, // output: openUi(library)
   params: {},
   memory: [surface], // AgentHarness takes a MemoryLayer[]
 });
@@ -94,11 +97,18 @@ What each hook buys you:
 `ctx.getLayerState` exposes the surface to loop predicates, so the interaction loop is plain composition — no new primitive:
 
 ```ts
-import { loop } from '@noetic-tools/core';
-import { openUi, ui } from '@noetic-tools/openui';
+import { loop, step, type Tool } from '@noetic-tools/core';
+import { openUi, ui, type OpenUiSurfaceLayer, type UiLibrary } from '@noetic-tools/openui';
+
+declare const library: UiLibrary;
+declare const surface: OpenUiSurfaceLayer;
+declare const quoteShipping: Tool;
 
 const checkout = loop({
-  body: step.llm({ id: 'render', model: 'claude-sonnet-5', tools: [quoteShipping], output: openUi(library) }),
+  id: 'checkout',
+  steps: [
+    step.llm({ id: 'render', model: 'claude-sonnet-5', tools: [quoteShipping], output: openUi(library) }),
+  ],
   until: ui.submitted(surface, 'checkout-form'),
 });
 ```
@@ -110,13 +120,28 @@ The package ships `ui.submitted(surface, ref?)`, `ui.interacted(surface, kind?)`
 A tool can define programmatic render functions so its calls and results carry their own UI — the way each Claude Code tool renders its own output. Fragments are built with a typed `fragment(library)` builder compiled from the library's Zod schemas, so a typo'd component or bad prop fails at typecheck:
 
 ```ts
-import { tool } from '@noetic-tools/core';
-import { fragment } from '@noetic-tools/openui';
+import { toolWithGenerator } from '@noetic-tools/core';
+import { createLibrary, defineComponent, fragment } from '@noetic-tools/openui';
+import { z } from 'zod';
+
+const library = createLibrary([
+  defineComponent({ name: 'Card', props: z.object({ title: z.string(), children: z.array(z.unknown()) }) }),
+  defineComponent({ name: 'Text', props: z.object({ value: z.string() }) }),
+  defineComponent({ name: 'Progress', props: z.object({ pct: z.number() }) }),
+  defineComponent({ name: 'Table', props: z.object({ rows: z.array(z.unknown()) }) }),
+]);
 
 const f = fragment(library);
 
-const quoteShipping = tool({
+const QuoteIn = z.object({ carrier: z.string().optional() });
+const QuoteOut = z.object({ quotes: z.array(z.object({ carrier: z.string(), price: z.number() })) });
+const QuoteProgress = z.object({ pct: z.number() });
+
+// A generator tool: `toolWithGenerator` is the builder that takes `event` plus
+// an `async *execute`; `tool()` is the non-streaming form.
+const quoteShipping = toolWithGenerator({
   name: 'quote_shipping',
+  description: 'Quote shipping rates for a carrier',
   input: QuoteIn,
   output: QuoteOut,
   event: QuoteProgress,
@@ -125,10 +150,10 @@ const quoteShipping = tool({
     progress: (events) => f.Progress(events.at(-1)?.pct ?? 0),
     result: (out) => f.Table(out.quotes),
   },
-  async *execute(args, ctx) {
+  async *execute() {
     yield { pct: 40 };
     /* … */
-    return quotes;
+    return { quotes: [{ carrier: 'ups', price: 12.5 }] };
   },
 });
 ```
@@ -140,7 +165,12 @@ The runtime runs `call` when the call streams in, `progress` on each yielded eve
 Point OpenUI's React client (`@openuidev/react-ui`) at a Noetic agent with `serveOpenUi`. It is runtime-neutral (built on `Request`/`Response`/`ReadableStream`, no `node:*` imports), so it runs on Node, Bun, and the edge.
 
 ```ts
+import type { AgentHarness } from '@noetic-tools/core';
+import type { OpenUiSurfaceLayer } from '@noetic-tools/openui';
 import { serveOpenUi } from '@noetic-tools/openui/server';
+
+declare const harness: AgentHarness;
+declare const surface: OpenUiSurfaceLayer;
 
 const handler = serveOpenUi(harness, { surface });
 // POST { prompt } → runs a turn, streams the surface as SSE
@@ -166,7 +196,13 @@ An `llm` node in a [JSON workflow](/docs/framework/json-runtime) opts into the c
 
 ```ts
 import { hydrateWorkflow } from '@noetic-tools/core';
-import { openUi } from '@noetic-tools/openui';
+import type { ExecuteStepFn, Tool, WorkflowDocument } from '@noetic-tools/core';
+import { openUi, type UiLibrary } from '@noetic-tools/openui';
+
+declare const doc: WorkflowDocument;
+declare const tools: ReadonlyMap<string, Tool>;
+declare const executeStep: ExecuteStepFn;
+declare const dashboardLibrary: UiLibrary;
 
 const steps = hydrateWorkflow(doc, {
   tools,

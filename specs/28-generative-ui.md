@@ -244,13 +244,15 @@ is plain composition — no new primitive:
 import { ui } from '@noetic-tools/openui';
 
 const checkout = loop({
-  body: step.llm({ id: 'render', model, tools: [quoteShipping], output: openUi(lib) }),
-  until: ui.submitted('checkout-form'),   // reads getLayerState(executionId, 'openui-surface')
+  id: 'checkout',
+  steps: [step.llm({ id: 'render', model, tools: [quoteShipping], output: openUi(lib) })],
+  until: ui.submitted(surface, 'checkout-form'), // reads the surface layer's live state
 });
 ```
 
-The package ships `ui.submitted(ref)`, `ui.interacted(kind?)`, and
-`ui.toAssistant()` predicates.
+The package ships `ui.submitted(surface, ref?)`, `ui.interacted(surface, kind?)`,
+and `ui.toAssistant(surface)` predicates — each takes the surface layer whose
+state it reads.
 
 For blocking prompts, the package implements the core ask-user pattern
 (`AskUserInput` / `AskUserOutput`, `core/types/ask-user-types.ts` — a portable
@@ -270,8 +272,9 @@ import { fragment } from '@noetic-tools/openui';
 
 const f = fragment(myLibrary);
 
-const quoteShipping = tool({
+const quoteShipping = toolWithGenerator({
   name: 'quote_shipping',
+  description: 'Quote shipping rates',
   input: QuoteIn, output: QuoteOut, event: QuoteProgress,
   ui: {
     call: (args) => f.Card([f.Spinner(), f.Text(`Quoting ${args.carrier ?? '…'}`)]),
