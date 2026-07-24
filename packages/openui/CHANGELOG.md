@@ -1,3 +1,7 @@
+## @noetic-tools/openui-v1.1.0 (2026-07-24)
+
+* feat(memory): give durable-task-state a write API and a fan-out-safe merge ([f09d5b0](https://github.com/mattapperson/noetic/commit/f09d5b0))
+
 ## @noetic-tools/openui-v1.0.0 (2026-07-08)
 
 * ci(release): publish @noetic-tools/openui to npm ([f2a1fd7](https://github.com/mattapperson/noetic/commit/f2a1fd7))
