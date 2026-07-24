@@ -166,10 +166,15 @@ tool<I, O>({
   execute: (args: I, toolCtx: ToolExecutionContext) => Promise<O>;
   needsApproval?: boolean;
   memory?: ToolMemoryDeclaration;
+  ui?: ToolUiDeclaration<I, O>;           // call/progress/result/error render fns (generative UI)
   itemSchemas?: ItemSchemaExtensions;     // { items?, developerMessages?, toolCalls?, toolResults? }
   decorateResultItem?: (params) => Item;  // enrich the harness-created tool-result item
 }): Tool
 ```
+
+`toolWithGenerator({ …, event, async *execute })` is the streaming form: it adds
+the `event` schema and takes an async generator, and its `ui.progress(events)`
+is typed from `event` (the non-generator `tool()` has no events to render).
 
 **`itemSchemas` contract** — extension schemas are additive and owner-scoped:
 

@@ -7,6 +7,7 @@ import type {
   ToolExecutionContext,
   ToolMemoryDeclaration,
   ToolResultExtensionItem,
+  ToolUiDeclaration,
 } from '@noetic-tools/types';
 import { NoeticConfigError } from '@noetic-tools/types';
 import type { ZodTypeAny, z } from 'zod';
@@ -31,6 +32,8 @@ interface ToolConfig<I extends ZodTypeAny, O extends ZodTypeAny> {
   needsApproval?: boolean;
   /** Optional memory declaration — the runtime generates a MemoryLayer from this via toolMemoryLayer(). */
   memory?: ToolMemoryDeclaration;
+  /** Optional UI declaration — the runtime emits the rendered fragments at call/progress/result points. */
+  ui?: ToolUiDeclaration<I, O>;
 }
 
 interface GeneratorToolConfig<I extends ZodTypeAny, E extends ZodTypeAny, O extends ZodTypeAny> {
@@ -55,6 +58,8 @@ interface GeneratorToolConfig<I extends ZodTypeAny, E extends ZodTypeAny, O exte
   needsApproval?: boolean;
   /** Optional memory declaration — the runtime generates a MemoryLayer from this via toolMemoryLayer(). */
   memory?: ToolMemoryDeclaration;
+  /** Optional UI declaration — the runtime emits the rendered fragments at call/progress/result points. */
+  ui?: ToolUiDeclaration<I, O, z.infer<E>>;
 }
 
 //#endregion
@@ -103,6 +108,7 @@ export function tool<I extends ZodTypeAny, O extends ZodTypeAny>(
     execute: config.execute,
     needsApproval: config.needsApproval,
     memory: config.memory,
+    ui: config.ui,
   } satisfies Tool<I, O>;
 }
 
@@ -127,6 +133,7 @@ export function toolWithGenerator<I extends ZodTypeAny, E extends ZodTypeAny, O 
     execute: config.execute,
     needsApproval: config.needsApproval,
     memory: config.memory,
+    ui: config.ui,
   } satisfies Tool<I, O>;
 }
 
