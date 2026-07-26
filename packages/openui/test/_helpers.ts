@@ -51,6 +51,17 @@ export function makeStorage(seed?: Record<string, unknown>): ScopedStorage & {
         ...data.keys(),
       ].filter((k) => k.startsWith(prefix ?? ''));
     },
+    async getMany<T>(keys: string[]): Promise<Map<string, T>> {
+      const found = new Map<string, T>();
+      for (const key of keys) {
+        const value = data.get(key);
+        if (value === undefined) {
+          continue;
+        }
+        found.set(key, frameworkCast<T>(value));
+      }
+      return found;
+    },
   };
 }
 

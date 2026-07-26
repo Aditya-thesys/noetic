@@ -1249,6 +1249,20 @@ function createCheckpointStore(opts: { storage: StorageAdapter }): CheckpointSto
 
 Pass a `checkpointStore` to the harness constructor to turn `harness.checkpoint(ctx)` and `harness.restore(executionId)` into real crash-recovery hooks. Snapshots fire automatically after every `execute()`, `detachedSpawn()` settlement, ask-user enqueue, and `runAppendPipeline`. Failures are swallowed with `console.warn` so durability issues never abort a successful step.
 
+#### Restoring a decorated context
+
+```typescript
+interface RestoreContextOptions {
+  parent?: Context;
+  state?: unknown;
+  memory?: MemoryLayer[];
+}
+
+harness.restore(executionId: string, opts?: RestoreContextOptions): Promise<Context | null>;
+```
+
+A snapshot recovers data, not the live objects a host attached to the original context (broadcasters, queues, abort registrations). Pass them back through `opts` or the resumed run gets a bare context and the loss is silent. Snapshot-owned fields (`items`, `threadId`, `resourceId`, cwd) are deliberately not accepted — they always come from the persisted record. Decoration applied after construction (`Object.assign`ed fields, abort registration) goes on the returned context, whose `id` is already the original `executionId`.
+
 ### Step-level resume and ledger retention
 
 A `checkpointStore` also turns on the **step-completion ledger**: one sharded entry per completed step (`execution:<id>:ledger:<seq>`) carrying that step's output, which a restored context replays instead of re-running. Memoization, not skip — the recorded value is what flows downstream. Failures are never recorded, and a step whose identity changed at a recorded path re-runs and drops its recorded subtree.
@@ -1283,6 +1297,31 @@ function createFileStorage(opts?: { root?: string }): StorageAdapter;
 ```
 
 File-backed `StorageAdapter`. Each key becomes a JSON file under `root`; writes use write-temp-then-rename for atomicity on POSIX filesystems. Defaults to `$HOME/.noetic/checkpoints` when `root` is omitted — for subprocess manifests, pass `{root: '$HOME/.noetic/subprocess'}` explicitly to keep manifests and snapshots on distinct disk roots.
+
+### `storageGetMany` and `StorageAdapter.getMany`
+
+```typescript
+interface StorageAdapter {
+  get<T>(key: string): Promise<T | null>;
+  set<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(prefix: string): Promise<string[]>;
+  getMany?<T>(keys: string[]): Promise<Map<string, T>>;   // optional batch read
+}
+
+function storageGetMany<T>(
+  storage: Pick<StorageAdapter, 'get' | 'getMany'>,
+  keys: string[],
+): Promise<Map<string, T>>;
+```
+
+`list()` returns keys, so reading the values behind a prefix is an N+1 — one round trip per key on a database- or network-backed adapter. `getMany` collapses that into one call; it is optional so pre-existing adapters stay valid.
+
+**Never call `storage.getMany` directly.** Use `storageGetMany(storage, keys)`, which delegates when the backend implements it and sweeps `get` in parallel when it does not. This is what `StepLedgerStore.load()` (restore path) and the semantic-condition embedding cache use.
+
+Implementation contract: missing keys are **absent** from the returned map, never mapped to `null` (a falsy stored value is present); ordering is not guaranteed, so a caller that needs order iterates its own key list and looks values up. `createInMemoryStorage()` and `createFileStorage()` both implement it.
+
+`ScopedStorage` — what a memory layer's `init` hook receives — exposes `getMany` as a **required** method, with scope-relative keys in the result and the fallback supplied by the wrapper.
 
 ### Host-restart recovery
 

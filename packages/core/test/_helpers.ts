@@ -107,6 +107,17 @@ function makeMapStorage() {
         ...store.keys(),
       ].filter((k) => !prefix || k.startsWith(prefix));
     },
+    async getMany<T>(keys: string[]): Promise<Map<string, T>> {
+      const found = new Map<string, T>();
+      for (const key of keys) {
+        const val = store.get(key);
+        if (val === undefined) {
+          continue;
+        }
+        found.set(key, frameworkCast<T>(val));
+      }
+      return found;
+    },
   };
 }
 

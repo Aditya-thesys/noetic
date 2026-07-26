@@ -103,23 +103,27 @@ export function createFileStorage(options: CreateFileStorageOptions = {}): Stora
   const root = options.root ?? defaultRoot();
   ensureDir(root);
 
+  function readKey<T>(key: string): T | null {
+    const file = keyToPath(root, key);
+    if (!existsSync(file)) {
+      return null;
+    }
+    try {
+      const raw = readFileSync(file, 'utf8');
+      if (raw.length === 0) {
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      return typedCast<T>(parsed);
+    } catch (err) {
+      console.warn(`createFileStorage: failed to read "${key}":`, err);
+      return null;
+    }
+  }
+
   return {
     async get<T>(key: string): Promise<T | null> {
-      const file = keyToPath(root, key);
-      if (!existsSync(file)) {
-        return null;
-      }
-      try {
-        const raw = readFileSync(file, 'utf8');
-        if (raw.length === 0) {
-          return null;
-        }
-        const parsed = JSON.parse(raw);
-        return typedCast<T>(parsed);
-      } catch (err) {
-        console.warn(`createFileStorage: failed to read "${key}":`, err);
-        return null;
-      }
+      return readKey<T>(key);
     },
     async set<T>(key: string, value: T): Promise<void> {
       ensureDir(root);
@@ -157,6 +161,19 @@ export function createFileStorage(options: CreateFileStorageOptions = {}): Stora
         }
       }
       return out;
+    },
+    async getMany<T>(keys: string[]): Promise<Map<string, T>> {
+      // Local disk has no per-key round trip to save, but implementing this keeps
+      // callers on one code path and skips the promise-per-key the fallback builds.
+      const found = new Map<string, T>();
+      for (const key of keys) {
+        const value = readKey<T>(key);
+        if (value === null) {
+          continue;
+        }
+        found.set(key, value);
+      }
+      return found;
     },
   };
 }

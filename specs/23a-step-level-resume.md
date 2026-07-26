@@ -115,7 +115,13 @@ This is the part most likely to bite. Snapshots are keyed by `executionId` under
 **Per-append cost is resolved by sharding.** Entries live one key per step under
 `execution:<id>:ledger:<seq>`, so an append is a single `set()` regardless of how long
 the run is — O(1) per step rather than O(n²) over the run. `load()` reassembles via
-`StorageAdapter.list(prefix)`.
+`StorageAdapter.list(prefix)` followed by a single batch read (`storageGetMany`), not
+one `get` per completed step: sharding trades an O(n²) write for an N-key read, and
+that read must not become a round trip per step on the recovery path. Adapters that
+implement `StorageAdapter.getMany` serve it in one query; the rest fall back to a
+parallel `get` sweep. Because a batch read gives no ordering guarantee, `load()`
+iterates the listed keys — whose zero-padded `<seq>` suffix is dispatch order — and
+looks each value up, so a later entry at a path still wins over an earlier one.
 
 Sharding bounds the cost of one append but not the total, so retention is bounded on two
 axes. Both are configured together on the harness and validated at construction — a

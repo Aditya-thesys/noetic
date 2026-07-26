@@ -19,6 +19,7 @@
  */
 
 import type { StorageAdapter } from '@noetic-tools/memory';
+import { storageGetMany } from '@noetic-tools/memory';
 import { NoeticConfigError } from '@noetic-tools/types';
 import { z } from 'zod';
 
@@ -192,17 +193,24 @@ export function createStepLedgerStore(opts: { storage: StorageAdapter }): StepLe
     },
     load: async (executionId) => {
       const keys = await storage.list(stepLedgerPrefix(executionId));
+      /* One batch read, not one round trip per completed step. Recovery is the
+       * moment a network-backed adapter can least afford an N+1. */
+      const raws = await storageGetMany<unknown>(storage, keys);
       const entries = new Map<string, StepLedgerEntry>();
+      /* Sequence bounds come from the KEYS, not the parsed rows: a row that fails to
+       * parse still occupies its key, so it must not be handed back out as reusable. */
       let highestSeq = -1;
       let oldestSeq = -1;
+      // Walk `keys`, not the map: `seqKey`'s zero-padding makes `list()` order
+      // dispatch order, and a later entry at a path must win over an earlier one.
       for (const key of keys) {
         const seq = seqFromKey(executionId, key);
         if (seq !== null) {
           highestSeq = Math.max(highestSeq, seq);
           oldestSeq = oldestSeq === -1 ? seq : Math.min(oldestSeq, seq);
         }
-        const raw = await storage.get(key);
-        if (raw === null || raw === undefined) {
+        const raw = raws.get(key);
+        if (raw === undefined) {
           continue;
         }
         const parsed = StepLedgerEntrySchema.safeParse(raw);

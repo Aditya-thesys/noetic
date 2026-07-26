@@ -154,6 +154,7 @@ export {
   planMemory,
   staticContent,
   steering,
+  storageGetMany,
   stripUnresolvedToolCalls,
   temporalMemory,
   toolMemoryLayer,
@@ -321,6 +322,7 @@ export type {
   ItemLog,
   LastLayerUsage,
   LayerUsageEntry,
+  RestoreContextOptions,
 } from '@noetic-tools/types';
 /** @public */
 export { getToolCwd, setToolCwd, snapshotCwdState } from './runtime/cwd-helpers';

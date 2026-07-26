@@ -39,6 +39,7 @@ import type {
   CheckpointStore,
   EventBroadcaster,
   QueuedMessage,
+  RestoreCheckpointOptions,
   StepLedgerRetention,
   StepLedgerStore,
 } from './deps/runtime';
@@ -987,9 +988,21 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
    * `NoeticConfigError(CHECKPOINT_SCHEMA_MISMATCH)` when the snapshot's
    * schema version is unrecognised — the caller is expected to discard the
    * checkpoint via `CheckpointStore.clear()` and start a fresh execution.
+   *
+   * `opts` is the `createContext`-shaped wiring the host attached to the
+   * original context (broadcaster, parent, state, memory overrides). A
+   * snapshot recovers data, not live objects — pass the same wiring here or
+   * the resumed run gets an undecorated context and whatever depended on that
+   * wiring (event streaming, mid-turn injection) stops working without
+   * failing. Fields the snapshot owns — items, threadId, resourceId, cwd —
+   * are not accepted; they always come from the persisted record.
+   *
+   * Decoration applied *after* construction (`Object.assign`ed fields, abort
+   * registration) stays the host's job: apply it to the context this returns,
+   * whose `id` is already the original `executionId`.
    */
-  async restore(executionId: string): Promise<Context | null> {
-    return restoreFromCheckpoint(this, executionId);
+  async restore(executionId: string, opts?: RestoreCheckpointOptions): Promise<Context | null> {
+    return restoreFromCheckpoint(this, executionId, opts);
   }
 
   /**

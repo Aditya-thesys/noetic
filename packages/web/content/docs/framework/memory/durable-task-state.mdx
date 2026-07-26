@@ -100,10 +100,34 @@ interface StorageAdapter {
   set<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<string[]>;
+  // Optional batch read -- see below.
+  getMany?<T>(keys: string[]): Promise<Map<string, T>>;
 }
 ```
 
 You can use the built-in `AgentHarness` for development or implement a persistent adapter backed by a database or file system.
+
+### `getMany` (optional, but implement it on a networked backend)
+
+`list(prefix)` returns keys, so anything that wants the values behind a prefix reads them afterwards. On a database- or network-backed adapter that is one round trip per key, and the framework does it in exactly the places you would least like a burst of them -- the step ledger's restore path, the semantic-condition embedding cache. Implementing `getMany` collapses those into a single query.
+
+It is optional: an adapter that omits it still works, because callers go through `storageGetMany(storage, keys)`, which falls back to a parallel `get` sweep.
+
+Two rules for an implementation:
+
+- Keys with no stored value are **absent** from the map -- never mapped to `null`. A falsy stored value (`0`, `''`, `false`) is present.
+- Ordering is not promised, so return rows in whatever order your query produced. Callers that need order iterate their own key list.
+
+```ts validate=none
+async getMany<T>(keys: string[]): Promise<Map<string, T>> {
+  const rows = await db.query('SELECT key, value FROM kv WHERE key IN (?)', [keys]);
+  const found = new Map<string, T>();
+  for (const row of rows) {
+    found.set(row.key, JSON.parse(row.value));
+  }
+  return found;
+}
+```
 
 ## Example: Task Recovery
 
