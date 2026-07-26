@@ -1,3 +1,7 @@
+## @noetic-tools/types-v2.1.1 (2026-07-26)
+
+* fix(core): cascade abort to child contexts and implement harness.cancel ([6d36c97](https://github.com/mattapperson/noetic/commit/6d36c97))
+
 ## @noetic-tools/types-v2.1.0 (2026-07-26)
 
 * feat(core): let restore() take the caller's context wiring ([2f28912](https://github.com/mattapperson/noetic/commit/2f28912)), closes [#59](https://github.com/mattapperson/noetic/issues/59)
