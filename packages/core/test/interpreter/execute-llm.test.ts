@@ -709,3 +709,87 @@ describe('executeLLM', () => {
     });
   });
 });
+
+describe('executeLLM cancellation', () => {
+  const step: StepLLM<ContextMemory, string, string> = {
+    kind: 'llm',
+    id: 'cancel-me',
+    model: 'gpt-4',
+  };
+
+  it("threads the context's abort signal into the model request", async () => {
+    const harness = makeMockHarness();
+    let capturedRequest: CallModelRequest | undefined;
+    harness.callModel = async (request) => {
+      capturedRequest = request;
+      return makeLLMResponse('ok');
+    };
+    const ctx = new ContextImpl({
+      harness,
+    });
+
+    await executeLLM(step, 'hi', ctx);
+
+    assert(capturedRequest !== undefined);
+    const signal = capturedRequest.signal;
+    assert(signal !== undefined);
+    expect(signal.aborted).toBe(false);
+    // The signal is live: aborting the context fires it, which is what stops
+    // an in-flight provider stream mid-generation.
+    ctx.abort('user pressed stop');
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('throws cancelled when an abort lands mid-call, still charging the partial spend', async () => {
+    const harness = makeMockHarness();
+    const ctx = new ContextImpl({
+      harness,
+    });
+    harness.callModel = async () => {
+      // The provider stream is cut by the abort; the model caller returns the
+      // rounds it completed before the signal fired.
+      ctx.abort('user pressed stop');
+      return makeLLMResponse('partial answer');
+    };
+
+    try {
+      await executeLLM(step, 'hi', ctx);
+      throw new Error('should have thrown');
+    } catch (e) {
+      if (!isNoeticError(e)) {
+        throw e;
+      }
+      expect(e.noeticError.kind).toBe('cancelled');
+      if (e.noeticError.kind !== 'cancelled') {
+        throw e;
+      }
+      expect(e.noeticError.reason).toBe('user pressed stop');
+    }
+
+    // The spend is real even though the step produced no output.
+    expect(ctx.tokens.input).toBe(10);
+    expect(ctx.tokens.output).toBe(5);
+    // The truncated response is not committed to the item log.
+    const assistantItems = ctx.itemLog.items.filter(
+      (i) => i.type === 'message' && i.role === 'assistant',
+    );
+    expect(assistantItems).toHaveLength(0);
+  });
+
+  it('leaves the request signal undefined for a foreign Context implementation', async () => {
+    const harness = makeMockHarness();
+    let capturedRequest: CallModelRequest | undefined;
+    harness.callModel = async (request) => {
+      capturedRequest = request;
+      return makeLLMResponse('ok');
+    };
+    const ctx = makeMockContext({
+      harness,
+    });
+
+    await executeLLM(step, 'hi', ctx);
+
+    assert(capturedRequest !== undefined);
+    expect(capturedRequest.signal).toBeUndefined();
+  });
+});

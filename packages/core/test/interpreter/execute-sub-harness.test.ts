@@ -448,5 +448,111 @@ describe('executeSubHarness', () => {
     expect(lengths[1]).toBe(2);
   });
 
+  //#region Cancellation
+
+  it('hands the executing context abort signal to the adapter session and turn', async () => {
+    const { ctx } = harnessCtx();
+    let startSignal: AbortSignal | undefined;
+    let turnSignal: AbortSignal | undefined;
+    let runContextSignal: AbortSignal | undefined;
+    const adapter: SubHarness = {
+      specificationVersion: 'harness-v1',
+      harnessId: 'claude-code',
+      async doStart(start): Promise<SubHarnessSession> {
+        startSignal = start.signal;
+        runContextSignal = start.ctx.signal;
+        return {
+          sessionId: 'session-1',
+          isResume: false,
+          async doPromptTurn(turn): Promise<SubHarnessTurnResult> {
+            turnSignal = turn.signal;
+            return {
+              items: [
+                makeMessage('assistant', 'ok'),
+              ],
+              text: 'ok',
+            };
+          },
+          async doStop() {
+            return {
+              harnessId: 'claude-code',
+              sessionId: 'session-1',
+              state: null,
+            };
+          },
+        };
+      },
+    };
+
+    await execute(
+      step.claudeCode({
+        id: 'cancellable',
+        harness: adapter,
+        prompt: 'go',
+      }),
+      undefined,
+      ctx,
+    );
+
+    assert(startSignal !== undefined);
+    assert(turnSignal !== undefined);
+    assert(runContextSignal !== undefined);
+    expect(startSignal.aborted).toBe(false);
+    // Aborting the context fires the signal the adapter is holding, which is
+    // what stops the coding agent's in-flight turn.
+    ctx.abort('user pressed stop');
+    expect(startSignal.aborted).toBe(true);
+    expect(turnSignal.aborted).toBe(true);
+    expect(runContextSignal.aborted).toBe(true);
+  });
+
+  it('surfaces cancelled (not step_failed) when the turn fails under an abort', async () => {
+    const { ctx } = harnessCtx();
+    const adapter: SubHarness = {
+      specificationVersion: 'harness-v1',
+      harnessId: 'claude-code',
+      async doStart(): Promise<SubHarnessSession> {
+        return {
+          sessionId: 'session-1',
+          isResume: false,
+          async doPromptTurn(): Promise<SubHarnessTurnResult> {
+            // The adapter's SDK rejects with its own error once the signal fires.
+            ctx.abort('user pressed stop');
+            throw new Error('The operation was aborted');
+          },
+          async doStop() {
+            return {
+              harnessId: 'claude-code',
+              sessionId: 'session-1',
+              state: null,
+            };
+          },
+        };
+      },
+    };
+
+    try {
+      await execute(
+        step.claudeCode({
+          id: 'interrupted',
+          harness: adapter,
+          prompt: 'go',
+        }),
+        undefined,
+        ctx,
+      );
+      throw new Error('should have thrown');
+    } catch (e) {
+      if (!isNoeticError(e)) {
+        throw e;
+      }
+      expect(e.noeticError.kind).toBe('cancelled');
+      if (e.noeticError.kind !== 'cancelled') {
+        throw e;
+      }
+      expect(e.noeticError.reason).toBe('user pressed stop');
+    }
+  });
+
   //#endregion
 });

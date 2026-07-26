@@ -212,6 +212,11 @@ export interface ContextHarness {
   disposeLayers(layers: MemoryLayer[], ctx: Context): Promise<void>;
   checkpoint(ctx: Context): Promise<void>;
   restore(executionId: string): Promise<Context | null>;
+  /**
+   * Cancel an execution: abort `ctx` and every live descendant context, then
+   * run memory-layer teardown (`onComplete` with `outcome: 'aborted'`, then
+   * `dispose`) bottom-up. A no-op on an already-cancelled context.
+   */
   cancel(ctx: Context, reason?: string): Promise<void>;
   /** Trace exporter spans are flushed to. Defaults to a no-op exporter. */
   readonly traceExporter: TraceExporter;
@@ -287,5 +292,17 @@ export interface Context<TMemory = ContextMemory, TState = unknown> {
   readonly completionValue: unknown;
   readonly aborted: boolean;
   readonly abortReason?: string;
+  /**
+   * Cancel this context and everything running beneath it. The first call wins
+   * (later calls are no-ops, so `abortReason` is stable), and it cascades
+   * *down* the execution tree: every live fork path and spawn child is aborted
+   * too. It never travels up — aborting a child leaves the parent running.
+   *
+   * Aborting rejects operations blocked on the context (channel `recv` waiters,
+   * parked back-pressure senders) with `cancelled`, cuts short the in-flight
+   * model call or sub-harness turn, and makes the next step boundary throw
+   * `cancelled`. Memory-layer teardown is NOT run — use
+   * `harness.cancel(ctx, reason)` for that.
+   */
   abort(reason?: string): void;
 }

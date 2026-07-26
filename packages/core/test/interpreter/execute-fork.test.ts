@@ -1195,5 +1195,78 @@ describe('executeFork', () => {
       });
       expect(await executeFork(step, 10, ctx, execute)).toBe(36);
     });
+
+    it('parent abort cascades into the in-flight path contexts', async () => {
+      const seen: Context<ContextMemory>[] = [];
+      const step: StepForkAll<ContextMemory, number, number> = {
+        kind: 'fork',
+        id: 'cascade-fork',
+        mode: 'all',
+        paths: () => [
+          {
+            kind: 'run',
+            id: 'slow-a',
+            execute: async (i: number, pathCtx) => {
+              seen.push(pathCtx);
+              await sleep(50);
+              return i;
+            },
+          },
+          {
+            kind: 'run',
+            id: 'slow-b',
+            execute: async (i: number, pathCtx) => {
+              seen.push(pathCtx);
+              await sleep(50);
+              return i;
+            },
+          },
+        ],
+        merge: (results) => results.reduce((a, b) => a + b, 0),
+      };
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+      });
+      setTimeout(() => {
+        ctx.abort('caller cancelled');
+      }, 10);
+
+      await expect(executeFork(step, 1, ctx, execute)).rejects.toThrow();
+
+      expect(seen).toHaveLength(2);
+      for (const pathCtx of seen) {
+        expect(pathCtx.aborted).toBe(true);
+        expect(pathCtx.abortReason).toBe('caller cancelled');
+      }
+      // Settled paths leave the parent's cascade registry.
+      expect(ctx.children).toHaveLength(0);
+    });
+
+    it('detaches path contexts once the fork settles', async () => {
+      const step: StepForkAll<ContextMemory, number, number> = {
+        kind: 'fork',
+        id: 'detach-fork',
+        mode: 'all',
+        paths: () => [
+          {
+            kind: 'run',
+            id: 'a',
+            execute: async (i: number) => i + 1,
+          },
+          {
+            kind: 'run',
+            id: 'b',
+            execute: async (i: number) => i + 2,
+          },
+        ],
+        merge: (results) => results.reduce((a, b) => a + b, 0),
+      };
+      const ctx = new ContextImpl({
+        harness: makeMockHarness(),
+      });
+
+      expect(await executeFork(step, 1, ctx, execute)).toBe(5);
+      expect(ctx.children).toHaveLength(0);
+    });
   });
 });

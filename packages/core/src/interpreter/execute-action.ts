@@ -63,7 +63,12 @@ import { isServerToolSpec, SteeringAction } from './action-types';
 import { cloneWithGuard } from './clone-guard';
 import { collectAllTools, deduplicateTools } from './collect-tools';
 import { trackUsage } from './message-helpers';
-import { getContextChannelStore, isFunctionCall, isMutableContext } from './typeguards';
+import {
+  getContextChannelStore,
+  isContextImpl,
+  isFunctionCall,
+  isMutableContext,
+} from './typeguards';
 
 //#region run
 
@@ -575,6 +580,11 @@ export async function executeLLM<TMemory, I, O>(
     }
 
     const _serverTools = serverToolSpecs.length > 0 ? serverToolSpecs : undefined;
+    // Cancellation reaches INSIDE the model call, not just the step boundary:
+    // the caller's abort signal stops the stream and the tool-round loop mid
+    // flight, so `ctx.abort()` / `harness.cancel()` don't wait out a long
+    // generation before taking effect (spec 09, Cancellation item 2).
+    const signal = isContextImpl(baseCtx) ? baseCtx.abortSignal : undefined;
     const request = resolvedTools
       ? {
           model: resolvedModel,
@@ -590,6 +600,7 @@ export async function executeLLM<TMemory, I, O>(
           allowedToolNames,
           nodeId: step.id,
           parentSpan: baseCtx.span,
+          signal,
         }
       : {
           model: resolvedModel,
@@ -601,6 +612,7 @@ export async function executeLLM<TMemory, I, O>(
           _serverTools,
           nodeId: step.id,
           parentSpan: baseCtx.span,
+          signal,
         };
     const response = await baseCtx.harness.callModel(request);
 
@@ -609,6 +621,16 @@ export async function executeLLM<TMemory, I, O>(
     // real, and until.maxCost / HarnessResponse.usage must see it (spec 07:
     // tokens accumulate across all LLM calls).
     trackUsage(baseCtx, response);
+
+    // An abort that landed mid-call returns whatever rounds completed before
+    // the signal fired. The spend is charged above, but a truncated generation
+    // is not this step's output — surface cancellation instead.
+    if (baseCtx.aborted) {
+      throw new NoeticErrorImpl({
+        kind: 'cancelled',
+        reason: baseCtx.abortReason ?? 'context aborted',
+      });
+    }
 
     if (hasLayers) {
       const decision = await baseCtx.harness.afterModelCall(layers, response, baseCtx);
@@ -865,6 +887,9 @@ export async function executeSpawn<TMemory, I, O>(
     if (hasLayers) {
       layerStore.cleanup(childExecutionCtx.executionId);
     }
+    // The child is settled: leave the parent's abort cascade so a parent that
+    // outlives many spawns does not retain every finished child.
+    childCtx.detachFromParent();
   }
 }
 

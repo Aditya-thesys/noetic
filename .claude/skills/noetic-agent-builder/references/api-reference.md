@@ -1169,6 +1169,16 @@ const msg = await harness.recv(channel, ctx);
 const msg2 = harness.tryRecv(channel, ctx);
 ```
 
+### Cancellation
+
+| Call | Description |
+|------|-------------|
+| `ctx.abort(reason?)` | Synchronous, no layer teardown. Cascades **down** the execution tree — every live `fork` path and `spawn` child (and their descendants) is aborted too; never up, so aborting one path leaves the parent and siblings running. First call wins, so `ctx.abortReason` is stable. |
+| `await harness.cancel(ctx, reason?)` | Same abort, plus memory-layer teardown per context — `onComplete` with `outcome: 'aborted'`, then `dispose` — run bottom-up (children before parents). No-op on an already-cancelled context. |
+| `await harness.abort(scope?)` | Session-level: cancels the in-flight *turn* for a thread (queued messages preserved), which aborts that turn's context tree. |
+
+Cancellation reaches inside the work in flight: blocked `recv` / parked `send` reject with `cancelled`, the provider stream and tool-round loop stop mid-generation, and a sub-harness (`step.claudeCode` etc.) turn is interrupted through the adapter's abort signal. Tokens and cost already spent stay charged to the context; the truncated response is not returned — the step throws `cancelled`. Beyond those points it is cooperative: a `step.run` body that ignores `ctx.aborted` between `await`s runs to its next step boundary.
+
 `DetachedHandle` is a thin wrapper over the adapter's `SubprocessHandle`. `.await()` polls `adapter.get()` until the handle reaches a terminal status, then reads the result from `handle.metadata.result` (or rehydrates `handle.metadata.error`). The default adapter (`createInMemorySubprocessAdapter()`) runs the step in-process on the microtask queue, so short-lived detached spawns resolve in sub-millisecond time; out-of-process adapters wait for the OS child to exit.
 
 ## Subprocess Adapters and Durable Execution

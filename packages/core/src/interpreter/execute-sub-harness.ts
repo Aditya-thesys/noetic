@@ -30,7 +30,7 @@ import { ZodError } from 'zod';
 import { resolveLazy } from './execute-action';
 import { trackUsage } from './message-helpers';
 import { SubHarnessEventBridge } from './sub-harness-events';
-import { isFunctionCall, isMutableContext } from './typeguards';
+import { isContextImpl, isFunctionCall, isMutableContext } from './typeguards';
 
 //#region Types
 
@@ -83,6 +83,15 @@ function resolveTurnText<I>(resolvedPrompt: string | undefined, input: I): strin
   return typeof input === 'string' ? input : '';
 }
 
+/**
+ * Abort signal of the executing context, when it is a framework context. Handed
+ * to the adapter so `ctx.abort()` / `harness.cancel()` stops the coding agent's
+ * in-flight turn instead of leaving a sub-process running until it finishes.
+ */
+function abortSignalOf(ctx: Context<ContextMemory>): AbortSignal | undefined {
+  return isContextImpl(ctx) ? ctx.abortSignal : undefined;
+}
+
 function buildRunContext(ctx: Context<ContextMemory>): SubHarnessRunContext {
   return {
     cwd: ctx.cwdState.cwd,
@@ -90,6 +99,7 @@ function buildRunContext(ctx: Context<ContextMemory>): SubHarnessRunContext {
     shell: ctx.shell,
     subprocess: ctx.subprocess,
     threadId: ctx.threadId,
+    signal: abortSignalOf(ctx),
   };
 }
 
@@ -170,6 +180,7 @@ async function startOrReuseSession<TMemory, I, O>(
     instructions: await resolveLazy(step.instructions, ctx),
     history,
     ctx: buildRunContext(baseCtx),
+    signal: abortSignalOf(baseCtx),
   });
   if (reuseKey) {
     store.set(reuseKey, session);
@@ -245,6 +256,9 @@ export async function executeSubHarness<TMemory, I, O>(
     result = await resolution.session.doPromptTurn({
       prompt: turnText,
       emit: (part) => bridge.forward(part),
+      // Per-turn signal, so a session reused across turns is cancelled by the
+      // context running the CURRENT turn rather than the one that started it.
+      signal: abortSignalOf(baseCtx),
     });
   } catch (e) {
     // Best-effort teardown of a fresh session before surfacing the failure;
@@ -254,6 +268,14 @@ export async function executeSubHarness<TMemory, I, O>(
     }
     if (e instanceof NoeticErrorImpl) {
       throw e;
+    }
+    // An adapter interrupted by the abort signal rejects with whatever its SDK
+    // throws; the context is the authority on why the turn ended.
+    if (baseCtx.aborted) {
+      throw new NoeticErrorImpl({
+        kind: 'cancelled',
+        reason: baseCtx.abortReason ?? 'context aborted',
+      });
     }
     throw new NoeticErrorImpl({
       kind: 'step_failed',

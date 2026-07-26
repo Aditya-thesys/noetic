@@ -3,8 +3,8 @@ import type { Channel, InputMessageItem } from '@noetic-tools/types';
 import { isNoeticError } from '@noetic-tools/types';
 import { z } from 'zod';
 import { ChannelStore } from '../../src/runtime/channel-store';
-import { ContextImpl } from '../../src/runtime/context-impl';
-import { makeMockHarness } from '../_helpers';
+import { ContextImpl, collectContextTree } from '../../src/runtime/context-impl';
+import { makeMockContext, makeMockHarness } from '../_helpers';
 
 function makeTestItem(): InputMessageItem {
   return {
@@ -282,5 +282,195 @@ describe('ContextImpl', () => {
     ctx.complete('result-42');
     expect(ctx.completed).toBe(true);
     expect(ctx.completionValue).toBe('result-42');
+  });
+});
+
+describe('ContextImpl abort cascade', () => {
+  test('aborting a parent aborts its children and grandchildren with the same reason', () => {
+    const harness = makeMockHarness();
+    const root = new ContextImpl({
+      harness,
+    });
+    const child = new ContextImpl({
+      harness,
+      parent: root,
+    });
+    const grandchild = new ContextImpl({
+      harness,
+      parent: child,
+    });
+
+    root.abort('user pressed stop');
+
+    expect(child.aborted).toBe(true);
+    expect(child.abortReason).toBe('user pressed stop');
+    expect(grandchild.aborted).toBe(true);
+    expect(grandchild.abortReason).toBe('user pressed stop');
+  });
+
+  test('a cascade with no reason gives children a parent-attributed reason', () => {
+    const harness = makeMockHarness();
+    const root = new ContextImpl({
+      harness,
+    });
+    const child = new ContextImpl({
+      harness,
+      parent: root,
+    });
+
+    root.abort();
+
+    expect(root.abortReason).toBeUndefined();
+    expect(child.abortReason).toBe('parent context aborted');
+  });
+
+  test('aborting a child never aborts its parent or siblings', () => {
+    const harness = makeMockHarness();
+    const root = new ContextImpl({
+      harness,
+    });
+    const first = new ContextImpl({
+      harness,
+      parent: root,
+    });
+    const second = new ContextImpl({
+      harness,
+      parent: root,
+    });
+
+    first.abort('path failed');
+
+    expect(first.aborted).toBe(true);
+    expect(root.aborted).toBe(false);
+    expect(second.aborted).toBe(false);
+  });
+
+  test('a child constructed under an already-aborted parent is aborted immediately', () => {
+    const harness = makeMockHarness();
+    const root = new ContextImpl({
+      harness,
+    });
+    root.abort('too late');
+
+    const child = new ContextImpl({
+      harness,
+      parent: root,
+    });
+
+    expect(child.aborted).toBe(true);
+    expect(child.abortReason).toBe('too late');
+    // Registering is pointless once aborted — the child is not retained.
+    expect(root.children).toHaveLength(0);
+  });
+
+  test('a detached child is no longer reached by the cascade', () => {
+    const harness = makeMockHarness();
+    const root = new ContextImpl({
+      harness,
+    });
+    const child = new ContextImpl({
+      harness,
+      parent: root,
+    });
+    expect(root.children).toEqual([
+      child,
+    ]);
+
+    child.detachFromParent();
+    expect(root.children).toHaveLength(0);
+    root.abort('done');
+
+    expect(child.aborted).toBe(false);
+  });
+
+  test('the first abort owns the reason; later aborts are no-ops', () => {
+    const harness = makeMockHarness();
+    const root = new ContextImpl({
+      harness,
+    });
+    root.abort('first');
+    root.abort('second');
+    expect(root.abortReason).toBe('first');
+
+    const late = new ContextImpl({
+      harness,
+      parent: root,
+    });
+    expect(late.abortReason).toBe('first');
+  });
+
+  test("aborting a parent rejects a child's pending recv with kind cancelled", async () => {
+    const harness = makeMockHarness();
+    const store = new ChannelStore();
+    const ch = {
+      name: 'cascade-recv',
+      schema: z.string(),
+      mode: 'queue' as const,
+    } satisfies Channel<string>;
+    const root = new ContextImpl({
+      harness,
+      channelStore: store,
+    });
+    const child = new ContextImpl({
+      harness,
+      parent: root,
+      channelStore: store,
+    });
+    const pending = child.recv(ch, {
+      timeout: 5_000,
+    });
+
+    root.abort('parent gone');
+
+    try {
+      await pending;
+      throw new Error('should have rejected');
+    } catch (e) {
+      if (!isNoeticError(e)) {
+        throw e;
+      }
+      expect(e.noeticError.kind).toBe('cancelled');
+      if (e.noeticError.kind !== 'cancelled') {
+        throw e;
+      }
+      expect(e.noeticError.reason).toBe('parent gone');
+    }
+  });
+});
+
+describe('collectContextTree', () => {
+  test('returns the subtree in pre-order, parents before children', () => {
+    const harness = makeMockHarness();
+    const root = new ContextImpl({
+      harness,
+    });
+    const first = new ContextImpl({
+      harness,
+      parent: root,
+    });
+    const firstChild = new ContextImpl({
+      harness,
+      parent: first,
+    });
+    const second = new ContextImpl({
+      harness,
+      parent: root,
+    });
+
+    expect(collectContextTree(root)).toEqual([
+      root,
+      first,
+      firstChild,
+      second,
+    ]);
+    // Reversed, it is the deepest-first cleanup order.
+    expect(collectContextTree(root).reverse()[0]).toBe(second);
+  });
+
+  test('a foreign Context implementation yields only itself', () => {
+    const foreign = makeMockContext();
+    expect(collectContextTree(foreign)).toEqual([
+      foreign,
+    ]);
   });
 });

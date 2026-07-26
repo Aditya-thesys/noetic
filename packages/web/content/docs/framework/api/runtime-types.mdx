@@ -153,7 +153,7 @@ declare interface RerenderRequest {
 | `afterModelCall(layers, response, ctx)` | Invoke each layer's `afterModelCall` steering hook. |
 | `checkpoint(ctx)` | Persist current execution state. |
 | `restore(executionId)` | Restore a previously checkpointed context. |
-| `cancel(ctx, reason?)` | Cancel an execution. |
+| `cancel(ctx, reason?)` | Cancel an execution: abort `ctx` and every live descendant context, then run layer teardown (`onComplete` with `outcome: 'aborted'`, then `dispose`) bottom-up. No-op if already cancelled. |
 | `createSpan(name, parent)` | Create an observability span. |
 
 ## DeliveryMode

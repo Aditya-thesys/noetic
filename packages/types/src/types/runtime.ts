@@ -312,6 +312,16 @@ export interface AgentHarnessContract<
   disposeLayers(layers: MemoryLayer[], ctx: Context): Promise<void>;
   checkpoint(ctx: Context): Promise<void>;
   restore(executionId: string): Promise<Context | null>;
+  /**
+   * Cancel an execution. Aborts `ctx` and — cascading down the execution tree —
+   * every live fork path and spawn child, then runs memory-layer teardown
+   * (`onComplete` with `outcome: 'aborted'`, then `dispose`) bottom-up.
+   *
+   * Blocked channel operations reject with `cancelled`, the in-flight model
+   * call and sub-harness turn are cut short, and the next step boundary throws
+   * `cancelled`. Idempotent: cancelling an already-cancelled context is a
+   * no-op. Use `ctx.abort()` when you want the signal without layer teardown.
+   */
   cancel(ctx: Context, reason?: string): Promise<void>;
   /** Trace exporter spans are flushed to. Defaults to a no-op exporter. */
   readonly traceExporter: TraceExporter;

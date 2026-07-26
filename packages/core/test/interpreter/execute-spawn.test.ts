@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import type { ContextMemory, MemoryLayer } from '@noetic-tools/memory';
 import { createLayerStateStore, Slot } from '@noetic-tools/memory';
 import type { Context, Item, StepSpawn } from '@noetic-tools/types';
+import { isNoeticError } from '@noetic-tools/types';
 import { z } from 'zod';
 import { channel } from '../../src/builders/channel-builder';
 import { executeSpawn } from '../../src/interpreter/execute-action';
@@ -408,6 +409,60 @@ describe('executeSpawn', () => {
       expect(sendError).toBeNull();
       assert(received !== undefined);
       expect(received).toBe(13);
+    });
+  });
+
+  describe('cancellation', () => {
+    it("aborting the parent mid-spawn cancels the child's blocked channel recv", async () => {
+      const ch = channel<string>('spawn-cancel', {
+        schema: z.string(),
+        mode: 'queue',
+      });
+      const channelStore = new ChannelStore();
+      let childCtx: Context<ContextMemory> | undefined;
+      const step = makeSpawnStep<ContextMemory, void, string>('cancel-spawn', async (_input, c) => {
+        childCtx = c;
+        // Never delivered — only the parent's abort unblocks this.
+        return await c.recv(ch, {
+          timeout: 30_000,
+        });
+      });
+
+      const parentCtx = new ContextImpl({
+        harness: makeMockHarness(),
+        channelStore,
+      });
+      const running = executeSpawn(step, undefined, parentCtx, simpleExecute);
+      // Let the child reach its blocked recv before cancelling.
+      await new Promise((r) => setTimeout(r, 10));
+      expect(parentCtx.children).toHaveLength(1);
+
+      parentCtx.abort('user pressed stop');
+
+      try {
+        await running;
+        throw new Error('should have rejected');
+      } catch (e) {
+        if (!isNoeticError(e)) {
+          throw e;
+        }
+        expect(e.noeticError.kind).toBe('cancelled');
+      }
+      assert(childCtx !== undefined);
+      expect(childCtx.aborted).toBe(true);
+      expect(childCtx.abortReason).toBe('user pressed stop');
+    });
+
+    it('detaches the child once the spawn settles, so it is not retained', async () => {
+      const step = makeSpawnStep<ContextMemory, void, string>('detach-spawn', async () => 'done');
+      const parentCtx = new ContextImpl({
+        harness: makeMockHarness(),
+      });
+
+      const result = await executeSpawn(step, undefined, parentCtx, simpleExecute);
+
+      expect(result).toBe('done');
+      expect(parentCtx.children).toHaveLength(0);
     });
   });
 });

@@ -65,22 +65,50 @@ Thrown when `ChannelHandle.send()` is called after the execution has completed. 
 
 ### Cancellation
 
-`cancelled` is thrown when `runtime.cancel()` is called on a context.
+`cancelled` is thrown when `runtime.cancel()` is called on a context, or when
+`ctx.abort()` is called directly.
+
+The two entry points differ only in cleanup:
+
+| | `ctx.abort(reason)` | `runtime.cancel(ctx, reason)` |
+|---|---|---|
+| Aborts the context and its descendants | yes | yes |
+| Runs memory-layer teardown (`onComplete` + `dispose`) | no | yes |
+| Return type | `void` (synchronous) | `Promise<void>` (awaits teardown) |
+
+Hosts that own the memory lifecycle themselves can use `ctx.abort()`; anything
+else should call `runtime.cancel()`.
 
 #### Propagation Semantics
 
-Cancellation walks the execution tree depth-first from the cancelled context:
+Cancellation covers the whole execution tree rooted at the cancelled context:
 
-1. **Children first.** The runtime cancels all child contexts (spawned or forked) before cancelling the target context. This ensures cleanup runs bottom-up.
+1. **Down the tree, never up.** Aborting a context cascades synchronously into
+   every live child context — fork paths, spawn children, and their own
+   descendants — so a nested sub-agent stops when its parent is cancelled. It
+   never travels the other way: aborting a child leaves the parent running.
+   A child context created *after* its parent was cancelled is aborted at
+   construction, so cancellation cannot be outrun by a spawn in flight.
 2. **Blocking operations.** Any pending `recv` or back-pressure `send` on a channel immediately rejects with `{ kind: 'cancelled' }`. The blocked Promise resolves with the error — it does not hang.
 3. **Fork paths.** In `race` mode, non-winning paths are cancelled using the same mechanism. In `all`/`settle` mode, if cancellation arrives mid-fork, all paths are cancelled and the fork throws `cancelled` (not `fork_partial`).
 4. **Loop iterations.** If cancellation arrives during a loop body, the current iteration's step is cancelled. The loop does NOT run another iteration. `onError` is NOT consulted — cancellation is not a retriable error.
-5. **Memory layer cleanup.** `onComplete` runs with `outcome: 'aborted'`, then `dispose` runs. Both always execute, even under cancellation. If a memory layer hook is in-progress when cancellation arrives, the hook is allowed to complete (up to its timeout) before `onComplete`/`dispose` run.
-6. **In-progress `store()` calls.** Concurrent `store()` calls are allowed to settle (they use `Promise.allSettled`). The runtime does not abort them — they may write partial results, which is acceptable because `store` is idempotent by convention.
+5. **In-flight model calls and sub-harness turns.** The executing context's
+   abort signal is threaded into the model call and into the sub-harness
+   adapter's session/turn, so cancellation cuts the stream and the tool-round
+   loop mid-flight rather than waiting for a long generation to finish. Tokens
+   and cost already spent are charged to the context; the truncated response is
+   not returned as the step's output — the step throws `cancelled`.
+6. **Memory layer cleanup.** `onComplete` runs with `outcome: 'aborted'`, then `dispose` runs. Both always execute, even under cancellation. If a memory layer hook is in-progress when cancellation arrives, the hook is allowed to complete (up to its timeout) before `onComplete`/`dispose` run. Cleanup runs bottom-up: a child context's teardown completes before its parent's.
+7. **In-progress `store()` calls.** Concurrent `store()` calls are allowed to settle (they use `Promise.allSettled`). The runtime does not abort them — they may write partial results, which is acceptable because `store` is idempotent by convention.
+
+Cancellation is cooperative beyond those points: step code that ignores
+`ctx.aborted` between `await`s runs until its next step boundary, which is where
+the interpreter throws `cancelled`.
 
 #### Cancellation is Idempotent
 
-Calling `runtime.cancel()` on an already-cancelled context is a no-op.
+Calling `runtime.cancel()` on an already-cancelled context is a no-op, and the
+first `abort()` owns `ctx.abortReason` — a later abort does not overwrite it.
 
 ---
 

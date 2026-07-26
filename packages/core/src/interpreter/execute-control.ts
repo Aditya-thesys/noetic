@@ -254,21 +254,37 @@ export async function executeFork<TMemory, I, O>(
     }),
   );
 
-  switch (step.mode) {
-    case 'all':
-      return executeAll(step, paths, input, ctx, childContexts, executeStep, concurrency);
-    case 'race':
-      return executeRace(step, paths, input, ctx, childContexts, executeStep, concurrency);
-    case 'settle':
-      return executeSettle(step, paths, input, ctx, childContexts, executeStep, concurrency);
-    default: {
-      const _exhaustive: never = step;
-      throw new NoeticErrorImpl({
-        kind: 'step_failed',
-        stepId: 'unknown',
-        cause: new Error('Unknown fork mode'),
-        retriesExhausted: false,
-      });
+  try {
+    switch (step.mode) {
+      case 'all':
+        return await executeAll(step, paths, input, ctx, childContexts, executeStep, concurrency);
+      case 'race':
+        return await executeRace(step, paths, input, ctx, childContexts, executeStep, concurrency);
+      case 'settle':
+        return await executeSettle(
+          step,
+          paths,
+          input,
+          ctx,
+          childContexts,
+          executeStep,
+          concurrency,
+        );
+      default: {
+        const _exhaustive: never = step;
+        throw new NoeticErrorImpl({
+          kind: 'step_failed',
+          stepId: 'unknown',
+          cause: new Error('Unknown fork mode'),
+          retriesExhausted: false,
+        });
+      }
+    }
+  } finally {
+    // Every path has settled (or been abandoned in `race`): leave the parent's
+    // abort cascade so it retains only children that are still cancellable.
+    for (const child of childContexts) {
+      child.detachFromParent();
     }
   }
 }

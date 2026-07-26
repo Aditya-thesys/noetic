@@ -4,6 +4,7 @@ export {
   allocateBudgets,
   assembleView,
   beforeToolCallLayers,
+  completeLayers,
   contextToExecCtx,
   createLayerStateStore,
   createRecallCache,

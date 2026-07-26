@@ -20,6 +20,7 @@ import {
   allocateBudgets,
   assembleView,
   beforeToolCallLayers,
+  completeLayers,
   contextToExecCtx,
   createLayerStateStore,
   createRecallCache,
@@ -46,6 +47,7 @@ import {
   ChannelStore,
   ContextImpl,
   captureCheckpoint,
+  collectContextTree,
   createInMemoryStorage,
   createStepLedgerStore,
   filterReasoningStream,
@@ -975,7 +977,64 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
 
   //#endregion
 
-  async cancel(_ctx: Context, _reason?: string): Promise<void> {}
+  /**
+   * Cancel an execution: abort `ctx` and every live descendant context, then
+   * run the memory-layer teardown for each (spec 09, Cancellation).
+   *
+   * The abort itself fans out top-down and synchronously — `ctx.abort()`
+   * cascades into every live fork path and spawn child, so no corner of the
+   * tree keeps working while cleanup is in progress. Cleanup then runs
+   * bottom-up: a child's `onComplete` / `dispose` fires before its parent's.
+   *
+   * Aborting a context rejects everything blocked on it (channel `recv`
+   * waiters, parked senders) with `{ kind: 'cancelled' }`, stops its in-flight
+   * model call and sub-harness turn, and makes the next step boundary throw
+   * `cancelled`.
+   *
+   * Cancellation is cooperative: a layer hook already in flight is allowed to
+   * settle, and step code that ignores `ctx.aborted` between `await`s runs to
+   * its next boundary. Calling `cancel()` on an already-cancelled context is a
+   * no-op.
+   */
+  async cancel(ctx: Context, reason?: string): Promise<void> {
+    if (ctx.aborted) {
+      return;
+    }
+    // Snapshot the tree first: `abort()` cascades and clears each context's
+    // child registry, so collecting afterwards would find nothing.
+    const tree = collectContextTree(ctx);
+    ctx.abort(reason);
+    for (const node of tree.reverse()) {
+      await this.teardownCancelledContext(node);
+    }
+  }
+
+  /**
+   * Run the layer lifecycle's abort path for one cancelled context:
+   * `onComplete` with `outcome: 'aborted'`, then `dispose`. Both always run
+   * under cancellation (spec 09, Cancellation item 5).
+   */
+  private async teardownCancelledContext(ctx: Context): Promise<void> {
+    const layers = ctx.layers ?? [];
+    if (layers.length === 0) {
+      return;
+    }
+    await completeLayers({
+      layers: [
+        ...layers,
+      ],
+      ctx: this.toExecCtx(ctx),
+      log: ctx.itemLog,
+      outcome: 'aborted',
+      store: this.layerStateStore,
+    });
+    await this.disposeLayers(
+      [
+        ...layers,
+      ],
+      ctx,
+    );
+  }
 
   createSpan(name: string, parent: Span | null): Span {
     return new SpanImpl(name, parent);

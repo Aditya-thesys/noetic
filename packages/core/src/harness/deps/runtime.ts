@@ -1,5 +1,5 @@
 export { ChannelStore } from '../../runtime/channel-store';
-export { ContextImpl } from '../../runtime/context-impl';
+export { ContextImpl, collectContextTree } from '../../runtime/context-impl';
 export { snapshotCwdState } from '../../runtime/cwd-helpers';
 export type { CheckpointStore } from '../../runtime/durable';
 export {

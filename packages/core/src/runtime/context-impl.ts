@@ -33,6 +33,25 @@ class NoopSpan implements Span {
   end(): void {}
 }
 
+/**
+ * @internal
+ * The cancellation tree rooted at `ctx`, in pre-order (a parent before its
+ * children). Reverse it to walk deepest-first. Only framework contexts track
+ * children, so a foreign `Context` implementation yields just itself.
+ */
+export function collectContextTree(ctx: Context): Context[] {
+  const tree: Context[] = [
+    ctx,
+  ];
+  if (!(ctx instanceof ContextImpl)) {
+    return tree;
+  }
+  for (const child of ctx.children) {
+    tree.push(...collectContextTree(child));
+  }
+  return tree;
+}
+
 export class ContextImpl implements Context<ContextMemory> {
   readonly id: string;
   stepCount = 0;
@@ -80,9 +99,18 @@ export class ContextImpl implements Context<ContextMemory> {
    * reject promptly with `{ kind: 'cancelled' }` instead of hanging until
    * their timeout (spec 09, Cancellation item 2). Each fork/spawn child
    * constructs its own ContextImpl and therefore its own controller —
-   * aborting a child never rejects the parent's waiters.
+   * aborting a child never rejects the parent's waiters, while aborting a
+   * parent DOES cascade down to every live child (see `_children`).
    */
   private readonly _abortController = new AbortController();
+  /**
+   * Live child contexts (fork paths, spawn children) registered for the abort
+   * cascade. A child adds itself at construction and removes itself via
+   * `detachFromParent()` when its execution settles, so a long-lived parent
+   * driving a loop of spawns does not accumulate finished children.
+   * @internal
+   */
+  private readonly _children = new Set<ContextImpl>();
   private _memory?: ContextMemory;
   /**
    * Stack of steps currently in flight on this context, most-recent last.
@@ -179,6 +207,50 @@ export class ContextImpl implements Context<ContextMemory> {
       }
     }
     this.itemLog = log;
+
+    // Join the parent's abort cascade last, so the child is fully constructed
+    // before an already-aborted parent aborts it.
+    if (this.parent instanceof ContextImpl) {
+      this.parent.adoptChild(this);
+    }
+  }
+
+  /**
+   * @internal
+   * Register `child` for the abort cascade. A child constructed under an
+   * already-aborted parent is aborted immediately — otherwise a spawn issued
+   * in the window between `abort()` and the interpreter noticing would run a
+   * whole sub-agent that nothing can stop.
+   */
+  private adoptChild(child: ContextImpl): void {
+    if (this._aborted) {
+      child.abort(this._abortReason ?? 'parent context aborted');
+      return;
+    }
+    this._children.add(child);
+  }
+
+  /**
+   * @internal
+   * Leave the parent's abort cascade. Called by the interpreter when a spawn
+   * child or fork path settles — a finished child has nothing left to cancel,
+   * and holding it would leak for the remaining life of the parent.
+   */
+  detachFromParent(): void {
+    if (this.parent instanceof ContextImpl) {
+      this.parent._children.delete(this);
+    }
+  }
+
+  /**
+   * @internal
+   * Live child contexts, in registration order. Consumed by
+   * `AgentHarness.cancel` to walk the execution tree depth-first.
+   */
+  get children(): ReadonlyArray<ContextImpl> {
+    return [
+      ...this._children,
+    ];
   }
 
   get elapsed(): number {
@@ -263,12 +335,26 @@ export class ContextImpl implements Context<ContextMemory> {
   }
 
   abort(reason?: string): void {
+    if (this._aborted) {
+      // Idempotent (spec 09): the first abort owns the reason, and the signal
+      // has already fired — re-firing it would be a no-op anyway.
+      return;
+    }
     this._aborted = true;
     this._abortReason = reason;
     // Reject everything blocked on this context (channel recv waiters,
-    // parked back-pressure senders) with { kind: 'cancelled' }. Idempotent —
-    // a second abort() leaves the already-aborted signal untouched.
+    // parked back-pressure senders) with { kind: 'cancelled' }.
     this._abortController.abort(reason ?? 'context aborted');
+    // Cascade to live children (fork paths, spawn children). The registry is
+    // cleared first so a child's own `detachFromParent()` during its unwind
+    // cannot mutate the set we are iterating.
+    const children = [
+      ...this._children,
+    ];
+    this._children.clear();
+    for (const child of children) {
+      child.abort(reason ?? 'parent context aborted');
+    }
   }
 
   /**
