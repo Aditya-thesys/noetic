@@ -1,9 +1,9 @@
 # Step-Level Resume
 
-> **Status:** DESIGN — not implemented. This spec proposes the mechanism; nothing described under "Design" exists in `packages/core` today.
+> **Status:** IMPLEMENTED. Two things landed differently from the original design — see "Divergences from the original design" at the end.
 > **Depends On:** `23-durable-execution` (CheckpointSnapshot, CheckpointStore, restore flow), `01-step-type` (Step), `03-control-flow` (fork/branch), `05-loop-and-until` (loop, every), `07-context-and-event-log` (Context, ItemLog)
-> **Exports (proposed):** `StepLedgerEntry`, `StepLedgerEntrySchema`, `stepPathKey`, `CheckpointSchemaVersion = 2`
-> **Source of truth (proposed):** `packages/core/src/runtime/durable/step-ledger.ts`, `packages/core/src/interpreter/execute.ts`, `packages/core/src/runtime/durable/harness-checkpoints.ts`, `packages/core/src/types/checkpoint.ts`
+> **Exports:** `StepLedgerEntry`, `StepLedgerEntrySchema`, `StepLedger`, `StepLedgerStore`, `createStepLedgerStore`
+> **Source of truth:** `packages/core/src/runtime/durable/step-ledger.ts`, `packages/core/src/interpreter/execute.ts`, `packages/core/src/runtime/context-impl.ts`, `packages/core/src/runtime/durable/harness-checkpoints.ts`
 
 ---
 
@@ -106,19 +106,21 @@ The ledger and the layer snapshot must be captured atomically or they drift: a l
 
 ## Schema and migration
 
-Bump `CheckpointSchemaVersion` to `2`, adding `ledger: StepLedgerEntry[]`.
-
-`23` specifies that `schemaVersion` is a literal and a mismatch throws `CHECKPOINT_SCHEMA_MISMATCH`, pointing the caller at `clear()`. That rule is right for genuinely incompatible changes, but discarding a v1 snapshot here loses item log, layer state, and cwd to gain a field whose absence is meaningful. **Recommend a v1→v2 migration that injects `ledger: []`**: a v1 snapshot then restores exactly as it does today and simply resumes nothing, which is precisely current behaviour.
+**No schema bump was needed.** Sharding the ledger under its own keys (below) kept it out of `CheckpointSnapshot` entirely, so `CheckpointSchemaVersion` stays `1` and a pre-ledger snapshot restores exactly as before — it simply recovers an empty ledger and resumes nothing. That is strictly better than the v1→v2 migration this section originally proposed.
 
 ## Size and retention
 
 This is the part most likely to bite. Snapshots are keyed by `executionId` under a single key and **overwritten in full** on every capture (`23` § Idempotency). Adding step outputs makes each write proportional to the run so far: a 200-step run averaging 4 KB of output per step writes ~800 KB on its final capture, and rewrites the growing blob on every step — O(n²) bytes over the run.
 
-Mitigations, in preference order:
+**Resolved by sharding, which is what shipped.** Entries live one key per step under
+`execution:<id>:ledger:<seq>`, so an append is a single `set()` regardless of how long
+the run is — O(1) per step rather than O(n²) over the run. `load()` reassembles via
+`StorageAdapter.list(prefix)`.
 
-1. **Shard the ledger** under its own key(s). `CheckpointKeys` already reserves auxiliary suffixes, and `23` states that sharding "can be added without bumping `schemaVersion`". Append-only ledger writes make each capture O(1). Accept the atomicity cost documented above.
-2. **Cap per-entry size**, spilling oversized outputs to a content-addressed side key or dropping the entry (a dropped entry re-runs its step — degradation, not corruption).
-3. **Cap total entries**, evicting oldest first, so resume is best-effort over a bounded suffix of the run.
+Still open, and deliberately not built:
+
+1. **Cap per-entry size**, spilling oversized outputs to a content-addressed side key or dropping the entry (a dropped entry re-runs its step — degradation, not corruption).
+2. **Cap total entries**, evicting oldest first, so resume is best-effort over a bounded suffix of the run.
 
 ## Open questions
 
@@ -140,3 +142,31 @@ Mitigations, in preference order:
 ## Sizing
 
 Prerequisite (wire the four firing boundaries) is small and independently valuable. The ledger itself is a moderate change concentrated in `execute()`, `harness-checkpoints.ts`, and the checkpoint schema, plus a new `step-ledger.ts`. The path-key work touches `ContextImpl`'s frontier bookkeeping and the fork dispatch site. The retention work (sharding) is the piece most likely to expand, and is the one worth prototyping first, since a design that is correct but writes O(n²) bytes will not ship.
+
+
+## Divergences from the original design
+
+Two things landed differently once the code was written.
+
+**The ledger is sharded, not carried in the snapshot.** See "Schema and migration" and
+"Size and retention" above: one key per entry removed both the O(n²) write amplification
+and the need for a schema version bump. The atomicity caveat this spec raised still
+applies in principle — the ledger and the layer-state snapshot are now separate writes —
+but in practice a ledger entry newer than the snapshot only causes a step to replay whose
+layer effects were also recorded by the same `execute()` call, since the post-step
+checkpoint fires immediately after the ledger append.
+
+**`detachedSpawn` is not a checkpoint boundary,** despite `23` listing one. A
+`DetachedHandle`'s settle is only observable through `await()`, and calling that
+internally would consume the result the caller is holding. The adapter's own
+`listLive()`/`reattach()` manifest already covers detached children, so nothing is lost.
+The other three boundaries (post-`execute`, post-`runAppendPipeline`, and the host-owned
+ask-user enqueue) are wired.
+
+**Replay happens at the coarsest completed granularity.** A composite step is an ordinary
+`run` step in this framework — that is how the hydrator builds `sequence` — so a parent
+that finished records its whole subtree's output, and a resumed run replays the parent
+without descending. This is right for a true resume and wrong for a *changed* workflow:
+editing a child under an unchanged parent has no effect on resume. A host that edited the
+workflow must clear the ledger rather than resume onto it. Divergence detection therefore
+catches a changed step at a recorded path, not a changed step beneath one.

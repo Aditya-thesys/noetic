@@ -243,6 +243,33 @@ export async function execute<TMemory = ContextMemory, I = unknown, O = unknown>
     });
   }
 
+  /* Resume: a previous run that completed this exact step replays its recorded
+   * output instead of re-running it. Captured before dispatch and held for the
+   * record below, because `leaveStep` pops the path on the way out. */
+  const ledgerPath = impl && step.id.length > 0 ? impl.currentPath() : undefined;
+  const ledger = impl?.ledger;
+  if (ledger && ledgerPath !== undefined && !ledger.isEmpty) {
+    const replayed = ledger.take(ledgerPath, {
+      id: step.id,
+      kind: step.kind,
+    });
+    if (replayed) {
+      if (impl && step.id.length > 0) {
+        impl.leaveStep(step.id);
+      }
+      emitFrameworkEvent({
+        broadcaster,
+        agentName,
+        eventType: 'step_replayed',
+        data: {
+          stepId: step.id,
+          kind: step.kind,
+        },
+      });
+      return frameworkCast<O>(replayed.output);
+    }
+  }
+
   let result: O;
   try {
     switch (step.kind) {
@@ -316,6 +343,25 @@ export async function execute<TMemory = ContextMemory, I = unknown, O = unknown>
       data: completedData,
     });
   }
+
+  /* Record the completed step so a resumed run replays this output rather than
+   * re-running the step. Only successes are recorded: a step that threw must run
+   * again. */
+  if (ledger && ledgerPath !== undefined) {
+    await ledger.record({
+      path: ledgerPath,
+      stepId: step.id,
+      kind: step.kind,
+      output: result,
+      completedAt: new Date().toISOString(),
+    });
+  }
+
+  /* Durability boundary (spec 23): snapshot after each completed step, so a crash
+   * lands on a checkpoint that includes the item-log and layer-state mutations this
+   * step produced. A no-op unless the harness has a CheckpointStore, and a failing
+   * save is logged rather than thrown — durability must never fail a good step. */
+  await baseCtx.checkpoint();
 
   return result;
 }

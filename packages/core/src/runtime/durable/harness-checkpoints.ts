@@ -4,6 +4,8 @@ import type { CheckpointSnapshot, FrontierFrame } from '../../types/checkpoint';
 import { CheckpointSchemaVersion } from '../../types/checkpoint';
 import { ContextImpl } from '../context-impl';
 import type { CheckpointStore } from './checkpoint-store';
+import type { StepLedgerStore } from './step-ledger';
+import { StepLedger } from './step-ledger';
 
 //#region Handle interface
 
@@ -17,6 +19,7 @@ import type { CheckpointStore } from './checkpoint-store';
  */
 export interface CheckpointHarnessHandle {
   readonly checkpointStore?: CheckpointStore;
+  readonly stepLedgerStore?: StepLedgerStore;
   readonly layerStateStore: LayerStateStore;
   readonly itemSchemas: ItemSchemaRegistry;
   readonly _memory?: MemoryLayer[];
@@ -137,6 +140,24 @@ export async function restoreFromCheckpoint(
       writable: false,
       enumerable: true,
     });
+    /* Attach the recovered completion ledger. `createContext` already built a fresh
+     * one keyed to a throwaway id; the restored context needs the entries recorded
+     * under THIS execution, or `execute()` would replay nothing and re-run the whole
+     * tree. Assigned the same way `id` is, to keep `createContext`'s public options
+     * free of resume-only fields. */
+    if (h.stepLedgerStore) {
+      const recovered = await h.stepLedgerStore.load(executionId);
+      Object.defineProperty(ctx, 'ledger', {
+        value: new StepLedger({
+          executionId,
+          store: h.stepLedgerStore,
+          recovered,
+        }),
+        configurable: false,
+        writable: false,
+        enumerable: true,
+      });
+    }
   }
   return ctx;
 }

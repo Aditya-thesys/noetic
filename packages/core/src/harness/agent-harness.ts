@@ -35,17 +35,24 @@ import {
   runAppendPipeline,
   storeLayers,
 } from './deps/memory';
-import type { CheckpointStore, EventBroadcaster, QueuedMessage } from './deps/runtime';
+import type {
+  CheckpointStore,
+  EventBroadcaster,
+  QueuedMessage,
+  StepLedgerStore,
+} from './deps/runtime';
 import {
   buildItemStream,
   ChannelStore,
   ContextImpl,
   captureCheckpoint,
   createInMemoryStorage,
+  createStepLedgerStore,
   filterReasoningStream,
   filterTextStream,
   restoreFromCheckpoint,
   SessionRunner,
+  StepLedger,
   snapshotCwdState,
 } from './deps/runtime';
 import type {
@@ -317,6 +324,12 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
    * @internal
    */
   readonly checkpointStore?: CheckpointStore;
+  /**
+   * Append-only step ledger backing resume. Present exactly when durability is on
+   * (a `CheckpointStore` is configured), so a zero-config harness records nothing.
+   * @internal
+   */
+  readonly stepLedgerStore?: StepLedgerStore;
   private readonly initialStep?: Step<ContextMemory, string, string>;
   /** Harness-wide tool pool merged into every context's `unifiedTools`. */
   private readonly harnessTools: ReadonlyArray<Tool>;
@@ -376,6 +389,11 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
     this.shell = opts.shell ?? createInMemoryShellAdapter();
     this.subprocess = opts.subprocess ?? createInMemorySubprocessAdapter();
     this.checkpointStore = opts.checkpointStore;
+    this.stepLedgerStore = opts.checkpointStore
+      ? createStepLedgerStore({
+          storage: this.config.storage ?? createInMemoryStorage(),
+        })
+      : undefined;
     this.initialStep = opts.initialStep;
     this.harnessTools = opts.tools ?? [];
     this._memory = opts.memory;
@@ -669,6 +687,10 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
     parentCtx: Context,
     overrides?: DetachedSpawnOverrides,
   ): DetachedHandle<O> {
+    /* NOT a checkpoint boundary, despite spec 23 listing one here: a DetachedHandle's
+     * settle is only observable via `await()`, and calling it internally would consume
+     * the result the caller is holding. The handle manifest is the adapter's own
+     * durability surface (`listLive`/`reattach`), so nothing is lost. */
     return dispatchStepThroughAdapter(this, s, input, parentCtx, overrides);
   }
 
@@ -693,13 +715,27 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
       base: this.itemSchemas,
       layers: effectiveMemory,
     });
+    /* The execution id is chosen here rather than inside ContextImpl so the ledger
+     * can be keyed to it — the ledger's storage keys and `ctx.id` must agree for a
+     * later `restore()` to find what this run recorded. */
+    const executionId = crypto.randomUUID();
     return new ContextImpl({
       ...rest,
+      id: executionId,
       harness: this,
       channelStore: this.channelStore,
       layers: effectiveMemory,
       itemSchemas,
       cwdState: resolveContextCwdState(this.rootCwdState, opts?.parent, cwdInit),
+      // Without this `ctx.checkpoint()` is inert, and the boundaries below never
+      // persist anything (a no-op when no CheckpointStore is configured).
+      checkpointFn: (c) => this.checkpoint(c),
+      ledger: this.stepLedgerStore
+        ? new StepLedger({
+            executionId,
+            store: this.stepLedgerStore,
+          })
+        : undefined,
     });
   }
 
@@ -1030,13 +1066,16 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
         rerenderRequests: [],
       };
     }
-    return runAppendPipeline({
+    const piped = await runAppendPipeline({
       layers,
       items,
       ctx: this.toExecCtx(ctx),
       log: ctx.itemLog,
       store: this.layerStateStore,
     });
+    // Layer state can mutate as items land, so the snapshot must follow the fold.
+    await this.checkpoint(ctx);
+    return piped;
   }
 
   async executeRerender(

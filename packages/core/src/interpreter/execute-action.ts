@@ -825,6 +825,10 @@ export async function executeSpawn<TMemory, I, O>(
     unifiedTools: childUnifiedTools.length > 0 ? childUnifiedTools : undefined,
     cwdState: snapshotCwdState(baseCtx),
     id: childId,
+    // The spawn's own path prefixes the child's, so a resumed run lines its steps up
+    // with the ones recorded inside the same spawn rather than at the root.
+    pathPrefix: baseCtx instanceof ContextImpl ? baseCtx.currentPath() : '',
+    ledger: baseCtx instanceof ContextImpl ? baseCtx.ledger : undefined,
   });
 
   try {

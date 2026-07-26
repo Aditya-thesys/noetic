@@ -54,15 +54,22 @@ function createChildContexts(ctx: Context, count: number, stepId: string): Conte
   const threadId = isContextImpl(ctx) ? ctx.threadId : crypto.randomUUID();
   const resourceId = isContextImpl(ctx) ? ctx.resourceId : undefined;
   const channelStore = getContextChannelStore(ctx);
+  const parentPath = isContextImpl(ctx) ? ctx.currentPath() : '';
+  const parentLedger = isContextImpl(ctx) ? ctx.ledger : undefined;
 
   return Array.from(
     {
       length: count,
     },
-    () =>
+    (_unused, index) =>
       new ContextImpl({
         harness: ctx.harness,
         parent: ctx,
+        /* Ledger paths must stay unique across sibling paths: a child ContextImpl
+         * starts with an empty frontier, so without a prefix every path would
+         * restart at the root and collide with its siblings. */
+        pathPrefix: `${parentPath}[${index}]`,
+        ledger: parentLedger,
         items: [
           ...ctx.itemLog.items,
         ],

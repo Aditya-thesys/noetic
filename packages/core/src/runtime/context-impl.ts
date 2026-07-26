@@ -19,6 +19,7 @@ import type {
   Tool,
 } from './context-deps';
 import { buildContextMemory, defaultItemSchemaRegistry } from './context-deps';
+import type { StepLedger } from './durable/step-ledger';
 import { ItemLogImpl } from './item-log-impl';
 
 const EMPTY_MEMORY: ContextMemory = Object.freeze({});
@@ -68,7 +69,7 @@ export class ContextImpl implements Context<ContextMemory> {
    * @internal
    */
   readonly channelStore?: ChannelStore;
-  private _checkpointFn?: () => Promise<void>;
+  private _checkpointFn?: (ctx: Context) => Promise<void>;
   private _completionValue?: unknown;
   private _completed = false;
   private _aborted = false;
@@ -93,6 +94,35 @@ export class ContextImpl implements Context<ContextMemory> {
    */
   private readonly _frontier: FrontierFrame[] = [];
 
+  /**
+   * Path segment for each in-flight frame, parallel to `_frontier`. Kept separate so
+   * `serialiseFrontier()` keeps emitting the published `FrontierFrame` shape.
+   * @internal
+   */
+  private readonly _segments: string[] = [];
+
+  /**
+   * Path this context's steps hang under. Empty on a root context; a fork/spawn child
+   * inherits its parent's current path plus a discriminator, so a path key stays unique
+   * across the whole step tree rather than restarting per child context.
+   * @internal
+   */
+  private readonly _pathPrefix: string;
+
+  /**
+   * Dispatch counts per `<parent path>/<step id>`, so a loop body re-entered on each
+   * iteration gets `#0`, `#1`, … instead of colliding on one key.
+   * @internal
+   */
+  private readonly _occurrences = new Map<string, number>();
+
+  /**
+   * Completion ledger for the execution this context belongs to. Shared by reference
+   * with fork/spawn children — one execution, one ledger.
+   * @internal
+   */
+  readonly ledger?: StepLedger;
+
   constructor(opts: {
     harness: AgentHarnessContract;
     parent?: Context;
@@ -102,7 +132,11 @@ export class ContextImpl implements Context<ContextMemory> {
     resourceId?: string;
     span?: Span;
     channelStore?: ChannelStore;
-    checkpointFn?: () => Promise<void>;
+    checkpointFn?: (ctx: Context) => Promise<void>;
+    /** Path this context's steps hang under (fork/spawn children inherit one). */
+    pathPrefix?: string;
+    /** The execution's completion ledger, shared with children by reference. */
+    ledger?: StepLedger;
     layers?: MemoryLayer[];
     unifiedTools?: ReadonlyArray<Tool>;
     itemSchemas?: ItemSchemaRegistry;
@@ -128,6 +162,8 @@ export class ContextImpl implements Context<ContextMemory> {
     this.resourceId = opts.resourceId;
     this.channelStore = opts.channelStore;
     this._checkpointFn = opts.checkpointFn;
+    this._pathPrefix = opts.pathPrefix ?? '';
+    this.ledger = opts.ledger;
     this.layers = opts.layers;
     this.unifiedTools = opts.unifiedTools;
     this.itemSchemas = opts.itemSchemas ?? defaultItemSchemaRegistry;
@@ -205,7 +241,7 @@ export class ContextImpl implements Context<ContextMemory> {
 
   async checkpoint(): Promise<void> {
     if (this._checkpointFn) {
-      await this._checkpointFn();
+      await this._checkpointFn(this);
     }
   }
 
@@ -252,7 +288,23 @@ export class ContextImpl implements Context<ContextMemory> {
    * stack of steps currently in-flight on this context.
    */
   enterStep(frame: FrontierFrame): void {
+    const parent = this.currentPath();
+    const key = `${parent}/${frame.stepId}`;
+    const occurrence = this._occurrences.get(key) ?? 0;
+    this._occurrences.set(key, occurrence + 1);
+    this._segments.push(`/${frame.stepId}#${occurrence}`);
     this._frontier.push(frame);
+  }
+
+  /**
+   * @internal
+   * The execution path of the step currently on top of the frontier — the ledger key
+   * identifying this exact dispatch. Stable across a replay given the same control
+   * flow, which is what lets a resumed run line recorded outputs up with the steps
+   * that produced them.
+   */
+  currentPath(): string {
+    return this._pathPrefix + this._segments.join('');
   }
 
   /**
@@ -273,6 +325,7 @@ export class ContextImpl implements Context<ContextMemory> {
       );
     }
     this._frontier.pop();
+    this._segments.pop();
   }
 
   /**

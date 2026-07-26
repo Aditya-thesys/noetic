@@ -6,6 +6,8 @@ export {
   captureCheckpoint,
   restoreFromCheckpoint,
 } from '../../runtime/durable/harness-checkpoints';
+export type { StepLedgerEntry, StepLedgerStore } from '../../runtime/durable/step-ledger';
+export { createStepLedgerStore, StepLedger } from '../../runtime/durable/step-ledger';
 export type { EventBroadcaster } from '../../runtime/event-broadcaster';
 export { createInMemoryStorage } from '../../runtime/in-memory-storage';
 export type { QueuedMessage } from '../../runtime/message-queue';
