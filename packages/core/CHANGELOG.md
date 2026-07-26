@@ -1,3 +1,7 @@
+## @noetic-tools/core-v3.1.0 (2026-07-26)
+
+* feat(core): let restore() take the caller's context wiring ([2f28912](https://github.com/mattapperson/noetic/commit/2f28912)), closes [#59](https://github.com/mattapperson/noetic/issues/59)
+
 ## @noetic-tools/core-v3.0.0 (2026-07-26)
 
 * feat(core): batch read on StorageAdapter, so ledger restore is not an N+1 ([6bb7b87](https://github.com/mattapperson/noetic/commit/6bb7b87)), closes [#58](https://github.com/mattapperson/noetic/issues/58)
