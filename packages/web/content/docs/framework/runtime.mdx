@@ -73,6 +73,7 @@ const harness = new AgentHarness({
 | `initialCwd` | `string` | `process.cwd()` | Initial working directory seeded into every root context this harness creates. |
 | `subprocess` | `SubprocessAdapter` | `createInMemorySubprocessAdapter()` | Adapter used to dispatch every `step.run`, `spawn`, and `detachedSpawn`. In-memory by default; set to `createLocalSubprocessAdapter({storage})` to run children out-of-process with durable handle manifests. See [Durability](/docs/framework/durability). |
 | `checkpointStore` | `CheckpointStore` | `undefined` | Typed wrapper over the harness's `StorageAdapter` used by `checkpoint()` / `restore()`. When absent, checkpoint/restore are no-ops and the harness has no durable-execution guarantees. See [Durability](/docs/framework/durability). |
+| `stepLedgerRetention` | `StepLedgerRetention` | `{ maxEntryBytes: 131072, maxEntries: 1000 }` | Bounds on the step-completion ledger that backs step-level resume. Only meaningful alongside `checkpointStore`. A non-positive cap throws `NoeticConfigError` (`STEP_LEDGER_RETENTION_INVALID`) at construction. See [Durability](/docs/framework/durability#step-level-resume). |
 
 ## execute()
 

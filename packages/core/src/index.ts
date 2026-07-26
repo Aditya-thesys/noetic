@@ -227,6 +227,8 @@ export type {
   RunnableLoopOpts,
   SessionSeedHarness,
   StallNudgeOpts,
+  StepLedgerRetention,
+  StepLedgerStats,
 } from './runtime/durable';
 /** @public */
 export {
@@ -236,6 +238,7 @@ export {
   createNudgeMessage,
   createStallNudgeHook,
   DEFAULT_NUDGE_MESSAGE_TEXT,
+  DEFAULT_STEP_LEDGER_RETENTION,
   runnableLoop,
   seedFromItems,
 } from './runtime/durable';

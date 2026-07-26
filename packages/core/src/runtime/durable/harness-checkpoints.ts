@@ -4,7 +4,7 @@ import type { CheckpointSnapshot, FrontierFrame } from '../../types/checkpoint';
 import { CheckpointSchemaVersion } from '../../types/checkpoint';
 import { ContextImpl } from '../context-impl';
 import type { CheckpointStore } from './checkpoint-store';
-import type { StepLedgerStore } from './step-ledger';
+import type { StepLedgerRetention, StepLedgerStore } from './step-ledger';
 import { StepLedger } from './step-ledger';
 
 //#region Handle interface
@@ -20,6 +20,7 @@ import { StepLedger } from './step-ledger';
 export interface CheckpointHarnessHandle {
   readonly checkpointStore?: CheckpointStore;
   readonly stepLedgerStore?: StepLedgerStore;
+  readonly stepLedgerRetention?: StepLedgerRetention;
   readonly layerStateStore: LayerStateStore;
   readonly itemSchemas: ItemSchemaRegistry;
   readonly _memory?: MemoryLayer[];
@@ -152,6 +153,7 @@ export async function restoreFromCheckpoint(
           executionId,
           store: h.stepLedgerStore,
           recovered,
+          retention: h.stepLedgerRetention,
         }),
         configurable: false,
         writable: false,
@@ -160,6 +162,30 @@ export async function restoreFromCheckpoint(
     }
   }
   return ctx;
+}
+
+//#endregion
+
+//#region clearCheckpoint
+
+/**
+ * Discard every recovery record for one execution: the snapshot and the completion
+ * ledger. Clearing the snapshot alone would strand the ledger's shards under
+ * `execution:<id>:ledger:*` forever, since nothing else enumerates them.
+ *
+ * This is the operation a host performs when resume is no longer valid — most often
+ * because the workflow changed. Replay happens at the coarsest completed granularity,
+ * so a step edited *beneath* a recorded parent is invisible to divergence detection and
+ * the old output would be replayed over the new tree. Clear, then start fresh.
+ *
+ * @internal
+ */
+export async function clearCheckpoint(
+  h: CheckpointHarnessHandle,
+  executionId: string,
+): Promise<void> {
+  await h.checkpointStore?.clear(executionId);
+  await h.stepLedgerStore?.clear(executionId);
 }
 
 //#endregion

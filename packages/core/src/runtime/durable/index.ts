@@ -12,3 +12,5 @@ export {
   createStallNudgeHook,
   DEFAULT_NUDGE_MESSAGE_TEXT,
 } from './stall-nudge';
+export type { StepLedgerRetention, StepLedgerStats } from './step-ledger';
+export { DEFAULT_STEP_LEDGER_RETENTION } from './step-ledger';

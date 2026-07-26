@@ -1249,6 +1249,33 @@ function createCheckpointStore(opts: { storage: StorageAdapter }): CheckpointSto
 
 Pass a `checkpointStore` to the harness constructor to turn `harness.checkpoint(ctx)` and `harness.restore(executionId)` into real crash-recovery hooks. Snapshots fire automatically after every `execute()`, `detachedSpawn()` settlement, ask-user enqueue, and `runAppendPipeline`. Failures are swallowed with `console.warn` so durability issues never abort a successful step.
 
+### Step-level resume and ledger retention
+
+A `checkpointStore` also turns on the **step-completion ledger**: one sharded entry per completed step (`execution:<id>:ledger:<seq>`) carrying that step's output, which a restored context replays instead of re-running. Memoization, not skip — the recorded value is what flows downstream. Failures are never recorded, and a step whose identity changed at a recorded path re-runs and drops its recorded subtree.
+
+```typescript
+interface StepLedgerRetention {
+  maxEntryBytes?: number; // default 128 * 1024 — larger outputs are NOT recorded
+  maxEntries?: number;    // default 1e3 — appending past this evicts the oldest entry
+}
+
+const harness = new AgentHarness({
+  name: 'durable',
+  params: {},
+  checkpointStore,
+  stepLedgerRetention: { maxEntries: 5e3 },   // Infinity disables a cap
+});
+
+// Discards the snapshot AND every ledger shard for one execution.
+await harness.clearCheckpoint(executionId);
+```
+
+Both caps degrade resume rather than break it: a step with no entry simply re-runs (costing work and re-doing its effects, never replaying a value that disagrees with the recorded run). A non-positive or `NaN` cap throws `NoeticConfigError` with `code: 'STEP_LEDGER_RETENTION_INVALID'` at construction.
+
+Call `clearCheckpoint` when the **workflow changed** — replay happens at the coarsest completed granularity, so a finished parent replays wholesale and an edit to one of its children is never noticed — and when an execution is finished or abandoned, since `checkpointStore.clear()` alone strands the ledger's per-step keys.
+
+The ledger covers control flow and `llm` steps. It does not make tool execution exactly-once: fence effects at the tool/host boundary.
+
 ### `createFileStorage`
 
 ```typescript

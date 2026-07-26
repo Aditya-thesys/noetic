@@ -88,7 +88,60 @@ if (restored !== null) {
 }
 ```
 
-Returns `null` when no snapshot is recorded. Throws `NoeticConfigError` with `code: 'CHECKPOINT_SCHEMA_MISMATCH'` when the persisted `schemaVersion` is unknown — callers discard via `checkpointStore.clear(executionId)` and start fresh.
+Returns `null` when no snapshot is recorded. Throws `NoeticConfigError` with `code: 'CHECKPOINT_SCHEMA_MISMATCH'` when the persisted `schemaVersion` is unknown — callers discard via `harness.clearCheckpoint(executionId)` and start fresh.
+
+## Step-Level Resume
+
+A restored context knows *what happened* but not *how far it got*: the frontier records which steps were in flight, never which finished. So alongside the snapshot, a harness with a `checkpointStore` keeps a **step-completion ledger** — one entry per successfully completed step, carrying that step's output.
+
+A resumed run replays those outputs instead of re-running the steps. It is memoization, not fast-forward: an `llm` step re-run to "catch up" would return something different from what the rest of the run already observed, so the recorded value is what flows downstream. Only successes are recorded — a step that threw runs again — and a step whose identity changed at a recorded path runs fresh, discarding its recorded subtree.
+
+Entries live one key per step under `execution:<id>:ledger:<seq>`, so an append is O(1) regardless of run length. Nothing here is visible on a zero-config harness: without a `checkpointStore` the ledger is never constructed.
+
+### Retention
+
+Sharding bounds the cost of one append, not the total, so retention is bounded on two axes:
+
+```ts validate=none
+import { AgentHarness, DEFAULT_STEP_LEDGER_RETENTION } from '@noetic-tools/core';
+
+const harness = new AgentHarness({
+  name: 'durable-agent',
+  params: {},
+  checkpointStore,
+  stepLedgerRetention: {
+    maxEntryBytes: 128 * 1024, // default: largest output recorded, UTF-8 bytes of its JSON
+    maxEntries: 1e3,           // default: entries retained per execution
+  },
+});
+```
+
+| Cap | Default | What exceeding it does |
+|---|---|---|
+| `maxEntryBytes` | 128 KiB | The entry is not recorded. Keeps one write inside the per-value limit real backends impose instead of failing it. An output that cannot be JSON-encoded at all (a cycle, a `BigInt`) is treated the same way. |
+| `maxEntries` | 1000 | The oldest entry is evicted, so resume is best-effort over a bounded **suffix** of the run: the tail replays, the head runs again. |
+
+Pass `Infinity` on either axis to disable that cap. A non-positive or `NaN` cap throws `NoeticConfigError` with `code: 'STEP_LEDGER_RETENTION_INVALID'` at construction — a silently-wrong cap would record nothing while the run still looked healthy.
+
+Both degradations reduce to one thing: a step with no entry re-runs. That costs work, and re-does whatever effects the step has, but never replays a value that disagrees with the recorded run. Retention is not silent — the first drop of each kind logs a warning.
+
+### When to Clear a Ledger
+
+```ts validate=none
+// Discards the snapshot AND every ledger shard for this execution.
+await harness.clearCheckpoint(executionId);
+```
+
+Call it in two situations:
+
+- **The workflow changed.** Replay happens at the coarsest completed granularity — a composite step is an ordinary `run` step here, so a parent that finished replays wholesale without descending. An edit to one of its children is therefore invisible, and the old output wins. A host that edited the workflow must clear rather than resume onto the old ledger.
+- **The execution is done with** — finished, or abandoned. `checkpointStore.clear(executionId)` alone strands the ledger's per-step keys, because nothing else enumerates them.
+
+### The Side-Effect Boundary
+
+Replaying an output replays a step's **value**, not its **effect**. A `run` step that wrote a file, or a `tool` step that opened a PR, returns its recorded output on replay while the effect is not redone — correct only if that effect was durable when it happened.
+
+Core's ledger therefore covers control flow and `llm` steps. It does **not** claim exactly-once execution for tools: it has no durable pre-dispatch record and no way to know whether a given tool is idempotent. Fence effects at the tool/host boundary.
 
 ### Limitations
 
@@ -246,7 +299,7 @@ The pattern generalises to any host — not just `@noetic-tools/cli`. Any embedd
 
 With the full durable stack configured:
 
-- Every completed step, spawned child, and ask-user prompt survives a host crash.
+- Every completed step, spawned child, and ask-user prompt survives a host crash — steps within the ledger's retention bounds replay their recorded output; anything outside them re-runs.
 - Restart rediscovers running children and rebuilds their parent contexts.
 - IPC replay is exactly-once at the frame level when the client acks correctly.
 - Schema version drift surfaces as a typed error rather than silent corruption.
