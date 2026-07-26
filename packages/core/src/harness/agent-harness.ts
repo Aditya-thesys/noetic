@@ -40,6 +40,8 @@ import type {
   CheckpointStore,
   EventBroadcaster,
   QueuedMessage,
+  RestoreCheckpointOptions,
+  StepLedgerRetention,
   StepLedgerStore,
 } from './deps/runtime';
 import {
@@ -47,11 +49,13 @@ import {
   ChannelStore,
   ContextImpl,
   captureCheckpoint,
+  clearCheckpoint,
   collectContextTree,
   createInMemoryStorage,
   createStepLedgerStore,
   filterReasoningStream,
   filterTextStream,
+  resolveStepLedgerRetention,
   restoreFromCheckpoint,
   SessionRunner,
   StepLedger,
@@ -136,6 +140,14 @@ interface AgentHarnessOpts<TParams extends Record<string, unknown> = Record<stri
    * to enable durable execution.
    */
   checkpointStore?: CheckpointStore;
+  /**
+   * Bounds on the step-completion ledger that backs step-level resume. Only meaningful
+   * alongside a `checkpointStore`. Defaults to `DEFAULT_STEP_LEDGER_RETENTION` — 128 KiB
+   * per entry, 1000 entries per execution — so an unbounded run cannot grow an unbounded
+   * ledger. Exceeding either cap costs resumability for the affected steps (they re-run),
+   * never correctness.
+   */
+  stepLedgerRetention?: StepLedgerRetention;
   llm?: LlmProviderConfig;
   /** Harness-wide item schema extensions. */
   itemSchemas?: ItemSchemaExtensions;
@@ -332,6 +344,12 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
    * @internal
    */
   readonly stepLedgerStore?: StepLedgerStore;
+  /**
+   * Resolved retention bounds for that ledger. Validated at construction so a bad cap
+   * is a loud config error rather than a run that silently records nothing.
+   * @internal
+   */
+  readonly stepLedgerRetention: Required<StepLedgerRetention>;
   private readonly initialStep?: Step<ContextMemory, string, string>;
   /** Harness-wide tool pool merged into every context's `unifiedTools`. */
   private readonly harnessTools: ReadonlyArray<Tool>;
@@ -396,6 +414,7 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
           storage: this.config.storage ?? createInMemoryStorage(),
         })
       : undefined;
+    this.stepLedgerRetention = resolveStepLedgerRetention(opts.stepLedgerRetention);
     this.initialStep = opts.initialStep;
     this.harnessTools = opts.tools ?? [];
     this._memory = opts.memory;
@@ -736,6 +755,7 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
         ? new StepLedger({
             executionId,
             store: this.stepLedgerStore,
+            retention: this.stepLedgerRetention,
           })
         : undefined,
     });
@@ -970,9 +990,38 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
    * `NoeticConfigError(CHECKPOINT_SCHEMA_MISMATCH)` when the snapshot's
    * schema version is unrecognised — the caller is expected to discard the
    * checkpoint via `CheckpointStore.clear()` and start a fresh execution.
+   *
+   * `opts` is the `createContext`-shaped wiring the host attached to the
+   * original context (broadcaster, parent, state, memory overrides). A
+   * snapshot recovers data, not live objects — pass the same wiring here or
+   * the resumed run gets an undecorated context and whatever depended on that
+   * wiring (event streaming, mid-turn injection) stops working without
+   * failing. Fields the snapshot owns — items, threadId, resourceId, cwd —
+   * are not accepted; they always come from the persisted record.
+   *
+   * Decoration applied *after* construction (`Object.assign`ed fields, abort
+   * registration) stays the host's job: apply it to the context this returns,
+   * whose `id` is already the original `executionId`.
    */
-  async restore(executionId: string): Promise<Context | null> {
-    return restoreFromCheckpoint(this, executionId);
+  async restore(executionId: string, opts?: RestoreCheckpointOptions): Promise<Context | null> {
+    return restoreFromCheckpoint(this, executionId, opts);
+  }
+
+  /**
+   * Discard everything `restore(executionId)` would have used — the snapshot *and* the
+   * step-completion ledger — so the next run of that execution starts clean.
+   *
+   * Hosts must call this rather than resume when the workflow itself changed. A resumed
+   * run replays at the coarsest completed granularity: a parent step that finished
+   * replays wholesale, so an edit to one of its children is never noticed and the stale
+   * output wins. Divergence detection only catches a changed step *at* a recorded path.
+   *
+   * Also the right call after a terminal outcome (the execution finished, or the user
+   * abandoned it) — `CheckpointStore.clear` alone leaves the ledger's per-step keys
+   * behind, and nothing else enumerates them.
+   */
+  async clearCheckpoint(executionId: string): Promise<void> {
+    return clearCheckpoint(this, executionId);
   }
 
   //#endregion

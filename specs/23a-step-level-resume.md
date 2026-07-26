@@ -2,7 +2,7 @@
 
 > **Status:** IMPLEMENTED. Two things landed differently from the original design — see "Divergences from the original design" at the end.
 > **Depends On:** `23-durable-execution` (CheckpointSnapshot, CheckpointStore, restore flow), `01-step-type` (Step), `03-control-flow` (fork/branch), `05-loop-and-until` (loop, every), `07-context-and-event-log` (Context, ItemLog)
-> **Exports:** `StepLedgerEntry`, `StepLedgerEntrySchema`, `StepLedger`, `StepLedgerStore`, `createStepLedgerStore`
+> **Exports:** `StepLedgerEntry`, `StepLedgerEntrySchema`, `StepLedger`, `StepLedgerStore`, `StepLedgerWindow`, `createStepLedgerStore`, `StepLedgerRetention`, `StepLedgerStats`, `DEFAULT_STEP_LEDGER_RETENTION`, `resolveStepLedgerRetention`
 > **Source of truth:** `packages/core/src/runtime/durable/step-ledger.ts`, `packages/core/src/interpreter/execute.ts`, `packages/core/src/runtime/context-impl.ts`, `packages/core/src/runtime/durable/harness-checkpoints.ts`
 
 ---
@@ -112,15 +112,71 @@ The ledger and the layer snapshot must be captured atomically or they drift: a l
 
 This is the part most likely to bite. Snapshots are keyed by `executionId` under a single key and **overwritten in full** on every capture (`23` § Idempotency). Adding step outputs makes each write proportional to the run so far: a 200-step run averaging 4 KB of output per step writes ~800 KB on its final capture, and rewrites the growing blob on every step — O(n²) bytes over the run.
 
-**Resolved by sharding, which is what shipped.** Entries live one key per step under
+**Per-append cost is resolved by sharding.** Entries live one key per step under
 `execution:<id>:ledger:<seq>`, so an append is a single `set()` regardless of how long
 the run is — O(1) per step rather than O(n²) over the run. `load()` reassembles via
-`StorageAdapter.list(prefix)`.
+`StorageAdapter.list(prefix)` followed by a single batch read (`storageGetMany`), not
+one `get` per completed step: sharding trades an O(n²) write for an N-key read, and
+that read must not become a round trip per step on the recovery path. Adapters that
+implement `StorageAdapter.getMany` serve it in one query; the rest fall back to a
+parallel `get` sweep. Because a batch read gives no ordering guarantee, `load()`
+iterates the listed keys — whose zero-padded `<seq>` suffix is dispatch order — and
+looks each value up, so a later entry at a path still wins over an earlier one.
 
-Still open, and deliberately not built:
+Sharding bounds the cost of one append but not the total, so retention is bounded on two
+axes. Both are configured together on the harness and validated at construction — a
+non-positive cap is a `NoeticConfigError` (`STEP_LEDGER_RETENTION_INVALID`), never a
+silent "records nothing":
 
-1. **Cap per-entry size**, spilling oversized outputs to a content-addressed side key or dropping the entry (a dropped entry re-runs its step — degradation, not corruption).
-2. **Cap total entries**, evicting oldest first, so resume is best-effort over a bounded suffix of the run.
+```typescript
+interface StepLedgerRetention {
+  /** Largest output recorded, in UTF-8 bytes of its JSON encoding. Default 128 KiB. */
+  maxEntryBytes?: number;
+  /** Most entries retained per execution. Default 1000. */
+  maxEntries?: number;
+}
+
+new AgentHarness({ /* … */ checkpointStore, stepLedgerRetention: { maxEntries: 5e3 } });
+```
+
+`Infinity` on either axis disables that cap.
+
+1. **Per-entry size.** An output whose JSON encoding exceeds `maxEntryBytes` is not
+   recorded at all — no spill to a side key, because moving the bytes elsewhere does not
+   bound them and every real backend has a per-value limit the write would hit anyway.
+   The cap is measured in UTF-8 bytes, decided from `String.length`'s 1–3 bytes-per-code-unit
+   bracket so the common cases never encode the payload just to size it. An output that
+   does not survive `JSON.stringify` at all (a cycle, a `BigInt`) is treated identically:
+   nothing an adapter could persist, so nothing is recorded.
+2. **Total entries.** Recording past `maxEntries` deletes the oldest entry, so resume is
+   best-effort over a bounded **suffix** of the run: the tail replays, the head runs
+   again. The bound is on the sequence *window* (`nextSeq - oldestSeq`), which is what
+   makes eviction O(1) — an exact row count would need a `list()` per append, the very
+   cost sharding removed. A gap from a failed write makes the window a slight
+   over-estimate, so eviction fires marginally early, never late.
+
+Both degradations reduce to the same thing: a step with no entry re-runs. That costs work
+and re-does whatever effects the step has (see "The side-effect boundary"), never a
+replayed value that disagrees with the recorded run. Retention is observable — `StepLedger.stats`
+counts what was recorded, dropped, and evicted — and the first drop of each kind warns.
+
+Sequence numbers are reserved synchronously, before the append's `await`. Concurrent fork
+legs record through the one shared ledger, and a counter read after an await would let two
+legs write the same key, silently losing a sibling's entry. `load()` therefore reports
+`nextSeq` from storage rather than deriving it from the recovered entry count, which
+retention's gaps would place *inside* the live window.
+
+## Clearing a ledger
+
+`harness.clearCheckpoint(executionId)` discards the snapshot **and** every ledger shard.
+Hosts need it in two situations:
+
+- **The workflow changed.** Replay happens at the coarsest completed granularity (see
+  "Divergences" below), so an edit to a step *beneath* a recorded parent is invisible to
+  divergence detection and the stale output wins. A host that edited the workflow must
+  clear rather than resume onto the old ledger.
+- **The execution reached a terminal state** — finished, or abandoned. `CheckpointStore.clear`
+  alone strands the ledger's per-step keys, because nothing else enumerates them.
 
 ## Open questions
 
@@ -138,6 +194,14 @@ Still open, and deliberately not built:
 - Non-determinism: an `llm` step with a scripted model returning different values per call; resume must surface the *recorded* value downstream.
 - Layer non-double-fold: a folding layer plus a replayed step; layer state after resume equals layer state before crash.
 - v1 snapshot loads under v2 with an empty ledger and resumes nothing.
+- Retention config: defaults applied per axis; `Infinity` accepted; every non-positive or `NaN` cap throws `STEP_LEDGER_RETENTION_INVALID` at harness construction, not at first record.
+- Per-entry cap boundary at N−1 / N / N+1 bytes, and a multi-byte payload that fits by code-unit count but not by byte count.
+- Entry cap boundary: no eviction at the cap, oldest-first eviction one past it, and the retained set is the newest `maxEntries`.
+- Bounded-suffix resume: a run longer than `maxEntries` resumes with the evicted head re-dispatched and the retained tail replayed, every output matching the original run.
+- An oversized or unserialisable output is not recorded, and its step re-dispatches on resume while its neighbours still replay.
+- Concurrent records (fork legs through one shared ledger) land on distinct keys.
+- A resumed ledger never reuses a live sequence number, even when retention left a gap.
+- `harness.clearCheckpoint` removes the snapshot and every ledger shard.
 
 ## Sizing
 

@@ -154,6 +154,7 @@ export {
   planMemory,
   staticContent,
   steering,
+  storageGetMany,
   stripUnresolvedToolCalls,
   temporalMemory,
   toolMemoryLayer,
@@ -227,6 +228,8 @@ export type {
   RunnableLoopOpts,
   SessionSeedHarness,
   StallNudgeOpts,
+  StepLedgerRetention,
+  StepLedgerStats,
 } from './runtime/durable';
 /** @public */
 export {
@@ -236,6 +239,7 @@ export {
   createNudgeMessage,
   createStallNudgeHook,
   DEFAULT_NUDGE_MESSAGE_TEXT,
+  DEFAULT_STEP_LEDGER_RETENTION,
   runnableLoop,
   seedFromItems,
 } from './runtime/durable';
@@ -318,6 +322,7 @@ export type {
   ItemLog,
   LastLayerUsage,
   LayerUsageEntry,
+  RestoreContextOptions,
 } from '@noetic-tools/types';
 /** @public */
 export { getToolCwd, setToolCwd, snapshotCwdState } from './runtime/cwd-helpers';

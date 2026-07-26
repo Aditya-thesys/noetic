@@ -1,3 +1,21 @@
+## @noetic-tools/core-v3.1.0 (2026-07-26)
+
+* feat(core): let restore() take the caller's context wiring ([2f28912](https://github.com/mattapperson/noetic/commit/2f28912)), closes [#59](https://github.com/mattapperson/noetic/issues/59)
+
+## @noetic-tools/core-v3.0.0 (2026-07-26)
+
+* feat(core): batch read on StorageAdapter, so ledger restore is not an N+1 ([6bb7b87](https://github.com/mattapperson/noetic/commit/6bb7b87)), closes [#58](https://github.com/mattapperson/noetic/issues/58)
+
+### BREAKING CHANGE
+
+* `ScopedStorage` gains a required `getMany` method. Code
+that implements the interface directly — in practice only test doubles, as
+the framework constructs the real one via `createScopedStorage` — must add
+it. `StorageAdapter.getMany` is optional and breaks nothing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Bp3JE94xvmxr4WWZ2bYjJJ
+
 ## @noetic-tools/core-v2.5.0 (2026-07-26)
 
 * feat(core): step-level resume via a completion ledger ([2dfe7e3](https://github.com/mattapperson/noetic/commit/2dfe7e3))

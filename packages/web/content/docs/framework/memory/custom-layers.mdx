@@ -210,6 +210,8 @@ State written by **any** path — `store()` hooks, `provides` functions, `onComp
 | `scopeKey` | `string` |
 | `ctx` | `ExecutionContext` |
 
+`ScopedStorage` is `get` / `set` / `delete` / `list` / `getMany`, all namespaced to your layer and scope. Rehydrating several keys at once — `list()` then read each — should go through `getMany(keys)` rather than a loop of `get`: it is one round trip on a backend that supports batch reads, and a parallel sweep on one that does not. Keys with nothing stored are absent from the returned map.
+
 ### RecallParams
 
 | Field | Type |

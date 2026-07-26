@@ -1,8 +1,8 @@
 # Durable Execution
 
 > **Depends On:** `07-context-and-event-log` (Context, ItemLog), `08-runtime` (AgentHarness, SubprocessAdapter, StorageAdapter), `21-tasks` (planner/implementer subprocess pattern), `22-cli-architecture` (CLI subprocess wiring)
-> **Exports:** `CheckpointSnapshot`, `CheckpointSnapshotSchema`, `CheckpointSchemaVersion`, `CheckpointStore`, `createCheckpointStore`, `FrontierFrame`, `CwdSnapshot`, `ItemLogSnapshot`, `PendingAskUserSnapshot`, `createFileStorage`, `DurableOutboundQueue`, `createDurableOutboundQueue`, `reattachLiveChildren`
-> **Source of truth:** `packages/core/src/runtime/checkpoint-store.ts`, `packages/core/src/runtime/file-storage.ts`, `packages/core/src/types/checkpoint.ts`, `packages/core/src/adapters/node/durable-outbound-queue.ts`, `packages/core/src/adapters/node/agent-ipc-{client,server,protocol}.ts`, `packages/cli/src/cli/reattach-live-children.ts`
+> **Exports:** `CheckpointSnapshot`, `CheckpointSnapshotSchema`, `CheckpointSchemaVersion`, `CheckpointStore`, `createCheckpointStore`, `FrontierFrame`, `CwdSnapshot`, `ItemLogSnapshot`, `PendingAskUserSnapshot`, `RestoreContextOptions`, `createFileStorage`, `DurableOutboundQueue`, `createDurableOutboundQueue`, `reattachLiveChildren`
+> **Source of truth:** `packages/core/src/runtime/checkpoint-store.ts`, `packages/core/src/runtime/durable/harness-checkpoints.ts`, `packages/core/src/runtime/file-storage.ts`, `packages/core/src/types/checkpoint.ts`, `packages/core/src/adapters/node/durable-outbound-queue.ts`, `packages/core/src/adapters/node/agent-ipc-{client,server,protocol}.ts`, `packages/cli/src/cli/reattach-live-children.ts`
 > **Docs:** `packages/web/content/docs/framework/durability.mdx`
 
 ---
@@ -13,7 +13,7 @@ Hosts crash. Tabs close. Users `kill -9` the TUI. The long-running children thos
 
 Three subsystems participate:
 
-1. **Checkpoint store** — `harness.checkpoint(ctx)` serialises the execution's frontier, layer state, cwd, ask-user queue, and item log to a `StorageAdapter`. `harness.restore(executionId)` reverses it.
+1. **Checkpoint store** — `harness.checkpoint(ctx)` serialises the execution's frontier, layer state, cwd, ask-user queue, and item log to a `StorageAdapter`. `harness.restore(executionId, opts?)` reverses it, with `opts` carrying back the host wiring a snapshot cannot serialise.
 2. **Subprocess adapter durability** — `adapter.listLive()` and `adapter.reattach(handleId)` persist and recover the handle manifest for every child the adapter launched.
 3. **Durable IPC** — `DurableOutboundQueue` numbers every outbound IPC frame with a monotonic seq, persists them through a `StorageAdapter`, and resumes from the client's last-acked offset on reconnect. Protocol v2 frames (`durable`, `durableResume`, `durableAck`) carry the wire envelope.
 
@@ -90,16 +90,45 @@ A failing `store.save` is logged via `console.warn` and swallowed. **A failing c
 
 ## Restore flow
 
-`harness.restore(executionId)` reverses a snapshot:
+`harness.restore(executionId, opts?)` reverses a snapshot:
 
 1. Reads the snapshot via `checkpointStore.load(executionId)`. Returns `null` if no snapshot is recorded.
 2. Validates `schemaVersion` (throws `CHECKPOINT_SCHEMA_MISMATCH` on mismatch).
 3. Replays `layers` into `harness.layerStateStore` keyed by the original `executionId`, so memory projectors and `ctx.memory[layerId]` accessors observe continuity across the restart.
 4. Re-parses `itemLog.items` through `harness.itemSchemas` to recover typed `Item[]`.
-5. Calls `harness.createContext({items, threadId, resourceId, cwdInit: snapshot.cwd?.current, memory: harness._memory})` to produce a fresh context seeded with the snapshot's item log, identity, and cwd.
+5. Calls `harness.createContext({...opts, items, threadId, resourceId, cwdInit: snapshot.cwd?.current, memory: opts?.memory ?? harness._memory})` to produce a fresh context seeded with the snapshot's item log, identity, and cwd.
 6. Overrides the returned context's `.id` to the original `executionId` so downstream adapter-correlation keeps working.
+7. Attaches the recovered step ledger (`23a-step-level-resume`) keyed to that same id.
 
 The returned `Context` is API-compatible with the pre-crash one: layer state is accessible, item log is replayed in order, cwd is restored, identity matches. The caller resumes execution from whatever the frontier requires — for an interactive agent, this is typically re-issuing the most recent user turn; for a long-running runner, it is the runner loop's own resume logic.
+
+### Host context wiring is the caller's to supply
+
+A snapshot recovers **data**. It cannot recover the **live objects** a host attached when it built the original context — event broadcasters, message queues, abort registrations. Restoring without them hands the host a bare context, and the failure is silent: nothing throws, streaming and mid-turn injection simply stop, on exactly the runs that already crashed once.
+
+`restore()` therefore takes a second argument:
+
+```typescript
+interface RestoreContextOptions {
+  parent?: Context;
+  state?: unknown;
+  memory?: MemoryLayer[];
+}
+```
+
+It is `createContext`-shaped on purpose — a host passes back the same wiring it passed the first time:
+
+```typescript
+const restored = await harness.restore(executionId, {
+  _broadcaster: session.broadcaster,   // internal seam, core-only
+  state: session.state,
+});
+```
+
+Two rules govern it:
+
+- **Snapshot-owned fields are not accepted.** `items`, `threadId`, `resourceId`, and `cwd` always come from the persisted record. They are absent from `RestoreContextOptions` so a caller cannot pass a value that would be ignored; core spreads `opts` first and overwrites them second, so the snapshot wins regardless.
+- **Post-construction decoration stays the host's job.** Fields a host `Object.assign`s onto a context, and abort registration, are applied to the context `restore()` returns — its `id` is already the original `executionId`, so anything keyed by execution id lands correctly.
 
 ## `CheckpointStore` API
 

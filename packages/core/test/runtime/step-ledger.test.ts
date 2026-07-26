@@ -2,20 +2,29 @@
 // recorded instead of re-running those steps. See specs/23a-step-level-resume.
 
 import { describe, expect, it } from 'bun:test';
+import type { StorageAdapter } from '@noetic-tools/memory';
 import type { Context, ContextMemory } from '@noetic-tools/types';
+import { isNoeticConfigError } from '@noetic-tools/types';
 import { fork } from '../../src/builders/control-flow-builders';
 import { loop } from '../../src/builders/loop-builder';
 import { step } from '../../src/builders/step-builders';
 import { AgentHarness } from '../../src/harness/agent-harness';
 import { createCheckpointStore } from '../../src/runtime/durable/checkpoint-store';
-import { createStepLedgerStore } from '../../src/runtime/durable/step-ledger';
+import type { StepLedgerEntry, StepLedgerRetention } from '../../src/runtime/durable/step-ledger';
+import {
+  createStepLedgerStore,
+  DEFAULT_STEP_LEDGER_RETENTION,
+  resolveStepLedgerRetention,
+  StepLedger,
+  stepLedgerPrefix,
+} from '../../src/runtime/durable/step-ledger';
 import { createInMemoryStorage } from '../../src/runtime/in-memory-storage';
 import { until } from '../../src/until/predicates';
 
 type Storage = ReturnType<typeof createInMemoryStorage>;
 type RunStep = ReturnType<typeof step.run<ContextMemory, string, string>>;
 
-function durableHarness(storage: Storage): AgentHarness {
+function durableHarness(storage: Storage, retention?: StepLedgerRetention): AgentHarness {
   return new AgentHarness({
     name: 'ledger-test',
     params: {},
@@ -23,6 +32,7 @@ function durableHarness(storage: Storage): AgentHarness {
     checkpointStore: createCheckpointStore({
       storage,
     }),
+    stepLedgerRetention: retention,
   });
 }
 
@@ -66,8 +76,24 @@ async function ledgerPaths(storage: Storage, executionId: string): Promise<strin
       await createStepLedgerStore({
         storage,
       }).load(executionId)
-    ).keys(),
+    ).entries.keys(),
   ];
+}
+
+/** Raw storage keys, so eviction is observed as bytes gone rather than a counter. */
+async function ledgerKeys(storage: Storage, executionId: string): Promise<string[]> {
+  return (await storage.list(stepLedgerPrefix(executionId))).sort();
+}
+
+/** An entry whose JSON output encodes to exactly `bytes` — `"…"` quotes included. */
+function entryOfBytes(path: string, bytes: number): StepLedgerEntry {
+  return {
+    path,
+    stepId: path,
+    kind: 'run',
+    output: 'x'.repeat(bytes - 2),
+    completedAt: '2026-07-26T00:00:00.000Z',
+  };
 }
 
 describe('step ledger', () => {
@@ -265,5 +291,597 @@ describe('step ledger', () => {
 
     expect((await ledgerPaths(storage, ctx.id)).filter((p) => p.includes('flaky'))).toEqual([]);
     expect(attempts).toBe(1);
+  });
+});
+
+// Retention: sharding made an append O(1) but left the TOTAL unbounded. Both caps
+// degrade resume rather than break it — an entry that is missing for any reason simply
+// re-runs its step. See specs/23a-step-level-resume § "Size and retention".
+describe('step ledger retention config', () => {
+  it('defaults both caps when nothing is configured', () => {
+    expect(resolveStepLedgerRetention()).toEqual({
+      maxEntryBytes: DEFAULT_STEP_LEDGER_RETENTION.maxEntryBytes,
+      maxEntries: DEFAULT_STEP_LEDGER_RETENTION.maxEntries,
+    });
+  });
+
+  it('keeps the default for the axis that was not overridden', () => {
+    expect(
+      resolveStepLedgerRetention({
+        maxEntries: 7,
+      }),
+    ).toEqual({
+      maxEntryBytes: DEFAULT_STEP_LEDGER_RETENTION.maxEntryBytes,
+      maxEntries: 7,
+    });
+  });
+
+  it('accepts Infinity as "no cap"', () => {
+    expect(
+      resolveStepLedgerRetention({
+        maxEntries: Number.POSITIVE_INFINITY,
+        maxEntryBytes: Number.POSITIVE_INFINITY,
+      }),
+    ).toEqual({
+      maxEntryBytes: Number.POSITIVE_INFINITY,
+      maxEntries: Number.POSITIVE_INFINITY,
+    });
+  });
+
+  /* A silently-wrong cap would drop every entry while the run still looked healthy,
+   * so each of these is a loud config error rather than a clamp. */
+  const badCaps: ReadonlyArray<
+    [
+      string,
+      StepLedgerRetention,
+    ]
+  > = [
+    [
+      'zero entries',
+      {
+        maxEntries: 0,
+      },
+    ],
+    [
+      'negative entries',
+      {
+        maxEntries: -1,
+      },
+    ],
+    [
+      'zero bytes',
+      {
+        maxEntryBytes: 0,
+      },
+    ],
+    [
+      'NaN bytes',
+      {
+        maxEntryBytes: Number.NaN,
+      },
+    ],
+    [
+      '-Infinity bytes',
+      {
+        maxEntryBytes: Number.NEGATIVE_INFINITY,
+      },
+    ],
+  ];
+  for (const [label, retention] of badCaps) {
+    it(`rejects ${label} with STEP_LEDGER_RETENTION_INVALID`, () => {
+      try {
+        resolveStepLedgerRetention(retention);
+        throw new Error('expected a config error');
+      } catch (e) {
+        if (!isNoeticConfigError(e)) {
+          throw e;
+        }
+        expect(e.code).toBe('STEP_LEDGER_RETENTION_INVALID');
+        expect(e.hint.length).toBeGreaterThan(0);
+      }
+    });
+  }
+
+  it('validates at harness construction, not at first record', () => {
+    const storage = createInMemoryStorage();
+    expect(() =>
+      durableHarness(storage, {
+        maxEntries: -5,
+      }),
+    ).toThrow('stepLedgerRetention.maxEntries');
+  });
+
+  it('boundary: an entry at the byte cap is recorded, one byte over is not', async () => {
+    const storage = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage,
+    });
+    const ledger = new StepLedger({
+      executionId: 'exec',
+      store,
+      retention: {
+        maxEntryBytes: 32,
+      },
+    });
+
+    await ledger.record(entryOfBytes('under', 31));
+    await ledger.record(entryOfBytes('at-cap', 32));
+    await ledger.record(entryOfBytes('over', 33));
+
+    expect([
+      ...(await store.load('exec')).entries.keys(),
+    ]).toEqual([
+      'under',
+      'at-cap',
+    ]);
+    expect(ledger.stats.recorded).toBe(2);
+    expect(ledger.stats.droppedOversize).toBe(1);
+  });
+
+  it('measures UTF-8 bytes, not code units', async () => {
+    // 'é' is one UTF-16 code unit but two UTF-8 bytes: 5 of them plus the JSON
+    // quotes is exactly 12 bytes, and a 6th pushes it to 14.
+    const storage = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage,
+    });
+    const ledger = new StepLedger({
+      executionId: 'exec',
+      store,
+      retention: {
+        maxEntryBytes: 12,
+      },
+    });
+
+    await ledger.record({
+      path: 'fits',
+      stepId: 'fits',
+      kind: 'run',
+      output: 'é'.repeat(5),
+      completedAt: '2026-07-26T00:00:00.000Z',
+    });
+    await ledger.record({
+      path: 'over',
+      stepId: 'over',
+      kind: 'run',
+      output: 'é'.repeat(6),
+      completedAt: '2026-07-26T00:00:00.000Z',
+    });
+
+    expect([
+      ...(await store.load('exec')).entries.keys(),
+    ]).toEqual([
+      'fits',
+    ]);
+  });
+
+  it('records an undefined output, which has no size to bound', async () => {
+    const storage = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage,
+    });
+    const ledger = new StepLedger({
+      executionId: 'exec',
+      store,
+      retention: {
+        maxEntryBytes: 1,
+      },
+    });
+
+    await ledger.record({
+      path: 'void',
+      stepId: 'void',
+      kind: 'run',
+      output: undefined,
+      completedAt: '2026-07-26T00:00:00.000Z',
+    });
+
+    expect(ledger.stats.recorded).toBe(1);
+    expect(ledger.stats.droppedOversize).toBe(0);
+  });
+
+  it('does not record an output that cannot be JSON-encoded', async () => {
+    const storage = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage,
+    });
+    const ledger = new StepLedger({
+      executionId: 'exec',
+      store,
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    await ledger.record({
+      path: 'cyclic',
+      stepId: 'cyclic',
+      kind: 'run',
+      output: circular,
+      completedAt: '2026-07-26T00:00:00.000Z',
+    });
+
+    expect(await ledgerKeys(storage, 'exec')).toEqual([]);
+    expect(ledger.stats.droppedUnserialisable).toBe(1);
+  });
+
+  it('boundary: evicts oldest-first only once the entry cap is exceeded', async () => {
+    const storage = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage,
+    });
+    const ledger = new StepLedger({
+      executionId: 'exec',
+      store,
+      retention: {
+        maxEntries: 3,
+      },
+    });
+
+    await ledger.record(entryOfBytes('a', 4));
+    await ledger.record(entryOfBytes('b', 4));
+    expect(ledger.stats.evicted).toBe(0);
+
+    await ledger.record(entryOfBytes('c', 4));
+    expect(ledger.stats.evicted).toBe(0); // at the cap — nothing to evict yet
+
+    await ledger.record(entryOfBytes('d', 4));
+    expect(ledger.stats.evicted).toBe(1); // one over — the oldest goes
+
+    const retained = [
+      ...(await store.load('exec')).entries.keys(),
+    ];
+    expect(retained).toEqual([
+      'b',
+      'c',
+      'd',
+    ]);
+    expect(await ledgerKeys(storage, 'exec')).toHaveLength(3);
+  });
+
+  it('gives concurrent records distinct keys', async () => {
+    /* Fork legs record through the one shared ledger while in flight together. If the
+     * sequence number were read after an await they would land on the same key and one
+     * leg's entry would vanish. */
+    const storage = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage,
+    });
+    const ledger = new StepLedger({
+      executionId: 'exec',
+      store,
+    });
+
+    await Promise.all([
+      ledger.record(entryOfBytes('leg-a', 8)),
+      ledger.record(entryOfBytes('leg-b', 8)),
+      ledger.record(entryOfBytes('leg-c', 8)),
+    ]);
+
+    expect(await ledgerKeys(storage, 'exec')).toHaveLength(3);
+    expect((await store.load('exec')).entries.size).toBe(3);
+  });
+
+  it('never reuses a sequence number after a resume, so no live entry is overwritten', async () => {
+    /* `nextSeq` has to come from storage: deriving it from the recovered entry COUNT
+     * would restart inside the live window whenever retention left a gap, and the first
+     * new append would overwrite an entry the resumed run still has to replay. */
+    const storage = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage,
+    });
+    const first = new StepLedger({
+      executionId: 'exec',
+      store,
+      retention: {
+        maxEntries: 2,
+      },
+    });
+    await first.record(entryOfBytes('a', 4));
+    await first.record(entryOfBytes('b', 4));
+    await first.record(entryOfBytes('c', 4)); // evicts 'a'
+
+    const resumed = new StepLedger({
+      executionId: 'exec',
+      store,
+      recovered: await store.load('exec'),
+      retention: {
+        maxEntries: 2,
+      },
+    });
+    await resumed.record(entryOfBytes('d', 4));
+
+    // 'd' landed on a fresh key and evicted 'b' rather than clobbering it.
+    expect([
+      ...(await store.load('exec')).entries.keys(),
+    ]).toEqual([
+      'c',
+      'd',
+    ]);
+  });
+});
+
+describe('step ledger retention through the harness', () => {
+  it('resumes over a bounded suffix: evicted steps re-run, retained ones replay', async () => {
+    const storage = createInMemoryStorage();
+    const harness = durableHarness(storage, {
+      maxEntries: 3,
+    });
+    const calls: string[] = [];
+    const steps = [
+      1,
+      2,
+      3,
+      4,
+      5,
+    ].map((n) => countingStep(`s${n}`, calls, () => `out-${n}`));
+
+    // A host driving steps itself: five top-level dispatches on one context, so no
+    // parent entry can replay the whole tree and mask eviction.
+    const ctx = harness.createContext();
+    for (const s of steps) {
+      await harness.run(s, 'go', ctx);
+    }
+    expect(calls).toHaveLength(5);
+    expect(await ledgerKeys(storage, ctx.id)).toHaveLength(3);
+
+    const resumed = mustRestore(await harness.restore(ctx.id));
+    calls.length = 0;
+    const outputs: string[] = [];
+    for (const s of steps) {
+      outputs.push(String(await harness.run(s, 'go', resumed)));
+    }
+
+    // The two oldest entries were evicted, so those steps ran again; the retained
+    // suffix replayed. Every output still matches the original run.
+    expect(calls).toEqual([
+      's1',
+      's2',
+    ]);
+    expect(outputs).toEqual([
+      'out-1',
+      'out-2',
+      'out-3',
+      'out-4',
+      'out-5',
+    ]);
+  });
+
+  it('re-runs a step whose output was too large to record', async () => {
+    const storage = createInMemoryStorage();
+    const harness = durableHarness(storage, {
+      maxEntryBytes: 64,
+    });
+    const calls: string[] = [];
+    const small = countingStep('small', calls, () => 'ok');
+    const big = countingStep('big', calls, () => 'z'.repeat(1e3));
+
+    const ctx = harness.createContext();
+    await harness.run(small, 'go', ctx);
+    await harness.run(big, 'go', ctx);
+    expect((await ledgerPaths(storage, ctx.id)).some((p) => p.includes('big'))).toBe(false);
+
+    const resumed = mustRestore(await harness.restore(ctx.id));
+    calls.length = 0;
+    await harness.run(small, 'go', resumed);
+    const replayed = await harness.run(big, 'go', resumed);
+
+    expect(calls).toEqual([
+      'big',
+    ]);
+    expect(replayed).toBe('z'.repeat(1e3));
+  });
+
+  it('clearCheckpoint drops the snapshot and every ledger shard', async () => {
+    /* The story for "the workflow changed, do not resume onto this": clearing the
+     * snapshot alone would strand the ledger's per-step keys, since nothing else
+     * enumerates them. */
+    const storage = createInMemoryStorage();
+    const harness = durableHarness(storage);
+    const calls: string[] = [];
+
+    const ctx = harness.createContext();
+    await harness.run(
+      countingStep('alpha', calls, () => 'a'),
+      'go',
+      ctx,
+    );
+    expect(await ledgerKeys(storage, ctx.id)).not.toEqual([]);
+
+    await harness.clearCheckpoint(ctx.id);
+
+    expect(await ledgerKeys(storage, ctx.id)).toEqual([]);
+    expect(await harness.restore(ctx.id)).toBeNull();
+  });
+});
+
+// ── load(): batch read (issue #58) ───────────────────────────────────
+//
+// `load()` lists the ledger prefix and then reads every key. Reading them one
+// await at a time is an N+1 on the recovery path — the moment a D1- or
+// network-backed adapter can least afford a burst of round trips. It must go
+// through `storageGetMany`, which uses the adapter's batch read when there is
+// one and sweeps `get` in parallel when there is not.
+
+interface LedgerStorageSpy {
+  storage: StorageAdapter;
+  getCalls: string[];
+  getManyCalls: string[][];
+}
+
+/** Wrap an in-memory adapter, counting reads. `withGetMany: false` hides the
+ *  batch read, standing in for an adapter published before it existed. */
+function spyOn(inner: Storage, withGetMany: boolean): LedgerStorageSpy {
+  const getCalls: string[] = [];
+  const getManyCalls: string[][] = [];
+  const base: StorageAdapter = {
+    get: async <T>(key: string): Promise<T | null> => {
+      getCalls.push(key);
+      return inner.get<T>(key);
+    },
+    set: (key, value) => inner.set(key, value),
+    delete: (key) => inner.delete(key),
+    list: (prefix) => inner.list(prefix),
+  };
+  if (!withGetMany) {
+    return {
+      storage: base,
+      getCalls,
+      getManyCalls,
+    };
+  }
+  return {
+    storage: {
+      ...base,
+      getMany: async <T>(keys: string[]): Promise<Map<string, T>> => {
+        getManyCalls.push([
+          ...keys,
+        ]);
+        const found = new Map<string, T>();
+        for (const key of keys) {
+          const value = await inner.get<T>(key);
+          if (value === null) {
+            continue;
+          }
+          found.set(key, value);
+        }
+        return found;
+      },
+    },
+    getCalls,
+    getManyCalls,
+  };
+}
+
+function entryAt(path: string, stepId: string, output: string): StepLedgerEntry {
+  return {
+    path,
+    stepId,
+    kind: 'run',
+    output,
+    completedAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+async function seedLedger(
+  storage: StorageAdapter,
+  executionId: string,
+  count: number,
+): Promise<void> {
+  const store = createStepLedgerStore({
+    storage,
+  });
+  for (let seq = 0; seq < count; seq++) {
+    await store.append(executionId, seq, entryAt(`/root/${seq}`, `step-${seq}`, `out-${seq}`));
+  }
+}
+
+describe('step ledger load', () => {
+  it('reads the whole ledger in one batch when the adapter supports it', async () => {
+    const inner = createInMemoryStorage();
+    await seedLedger(inner, 'exec-batch', 5);
+    const spy = spyOn(inner, true);
+
+    const loaded = await createStepLedgerStore({
+      storage: spy.storage,
+    }).load('exec-batch');
+
+    expect(loaded.entries.size).toBe(5);
+    expect(spy.getManyCalls.length).toBe(1);
+    expect(spy.getManyCalls[0].length).toBe(5);
+    expect(spy.getCalls).toEqual([]);
+  });
+
+  it('falls back to per-key reads on an adapter with no batch read', async () => {
+    const inner = createInMemoryStorage();
+    await seedLedger(inner, 'exec-fallback', 3);
+    const spy = spyOn(inner, false);
+
+    const loaded = await createStepLedgerStore({
+      storage: spy.storage,
+    }).load('exec-fallback');
+
+    expect(loaded.entries.size).toBe(3);
+    expect(spy.getCalls.length).toBe(3);
+    expect(spy.getManyCalls).toEqual([]);
+    expect(loaded.entries.get('/root/1')?.output).toBe('out-1');
+  });
+
+  it('recovers identical entries through either path', async () => {
+    const inner = createInMemoryStorage();
+    await seedLedger(inner, 'exec-parity', 4);
+
+    const viaBatch = await createStepLedgerStore({
+      storage: spyOn(inner, true).storage,
+    }).load('exec-parity');
+    const viaFallback = await createStepLedgerStore({
+      storage: spyOn(inner, false).storage,
+    }).load('exec-parity');
+
+    expect([
+      ...viaBatch.entries.keys(),
+    ]).toEqual([
+      ...viaFallback.entries.keys(),
+    ]);
+    expect([
+      ...viaBatch.entries.values(),
+    ]).toEqual([
+      ...viaFallback.entries.values(),
+    ]);
+  });
+
+  it('keeps the last entry recorded at a path, so dispatch order survives batching', async () => {
+    const inner = createInMemoryStorage();
+    const store = createStepLedgerStore({
+      storage: inner,
+    });
+    // Same path, recorded twice — a loop body re-entering the same slot. The
+    // later sequence number must win, which only holds if `load` walks the keys
+    // in `list()` order rather than whatever order the batch read returns.
+    await store.append('exec-order', 0, entryAt('/root/body', 'body', 'first'));
+    await store.append('exec-order', 1, entryAt('/root/body', 'body', 'second'));
+
+    // A batch read returns a map, and nothing in the contract says its iteration
+    // order matches the key order asked for — a real backend may return rows in
+    // whatever order the query produced. Reverse it here so a `load` that walked
+    // the map instead of the keys would recover 'first' and fail.
+    const reversing: StorageAdapter = {
+      ...inner,
+      getMany: async <T>(keys: string[]): Promise<Map<string, T>> => {
+        const found = new Map<string, T>();
+        for (const key of [
+          ...keys,
+        ].reverse()) {
+          const value = await inner.get<T>(key);
+          if (value === null) {
+            continue;
+          }
+          found.set(key, value);
+        }
+        return found;
+      },
+    };
+
+    const loaded = await createStepLedgerStore({
+      storage: reversing,
+    }).load('exec-order');
+
+    expect(loaded.entries.size).toBe(1);
+    expect(loaded.entries.get('/root/body')?.output).toBe('second');
+  });
+
+  it('still skips a corrupt row that arrives through the batch read', async () => {
+    const inner = createInMemoryStorage();
+    await seedLedger(inner, 'exec-corrupt', 2);
+    await inner.set(`${stepLedgerPrefix('exec-corrupt')}00000009`, {
+      path: '',
+      nonsense: true,
+    });
+
+    const loaded = await createStepLedgerStore({
+      storage: spyOn(inner, true).storage,
+    }).load('exec-corrupt');
+
+    expect(loaded.entries.size).toBe(2);
+    expect(loaded.entries.has('')).toBe(false);
   });
 });

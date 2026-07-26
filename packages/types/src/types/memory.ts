@@ -155,6 +155,21 @@ export interface StorageAdapter {
   set<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<string[]>;
+  /**
+   * Batch read. Anything that lists a prefix and then reads each key is an N+1 —
+   * one round trip per key on a network- or database-backed adapter, which is
+   * exactly what a resume path cannot afford. Implement this and the round trips
+   * collapse to one.
+   *
+   * Optional so existing adapters keep working: callers MUST NOT depend on it
+   * directly — go through `storageGetMany`, which falls back to a parallel
+   * `get` sweep when a backend has not implemented it.
+   *
+   * Keys with no stored value are ABSENT from the returned map. The map is never
+   * sparse-with-nulls, so `map.size < keys.length` is the normal way to see that
+   * something was missing.
+   */
+  getMany?<T>(keys: string[]): Promise<Map<string, T>>;
 }
 
 /** @public Scope-namespaced storage interface provided to memory layer init hooks. */
@@ -163,6 +178,13 @@ export interface ScopedStorage {
   set<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
   list(prefix?: string): Promise<string[]>;
+  /**
+   * Batch read, always available — the scoped wrapper supplies the fallback so a
+   * layer never has to check. Returned keys are scope-relative (the namespace
+   * prefix is stripped, as with `list`), and missing keys are absent rather than
+   * null.
+   */
+  getMany<T>(keys: string[]): Promise<Map<string, T>>;
 }
 
 /** @public Parameters passed to a memory layer's `init` hook. */
