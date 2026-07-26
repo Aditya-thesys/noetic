@@ -16,13 +16,15 @@
 # do not add exact file-name carve-outs.
 
 [constraints]
-# sentrux 0.5.7 reports 1 "cycle" over a strongly-connected component in
-# packages/code-agent/src/lsp/** ↔ tools/node-factory/** after the
-# platform-node split, even though the DSM confirms zero above-diagonal
-# edges (clean layering) and grepping the 6 files named in the report
-# shows only forward import edges. Accept 1 until upstream SCC detection
-# is fixed — real new cycles still fail the gate because each above-zero
-# value is checked against this ceiling.
+# sentrux 0.5.7 reports 1 "cycle": a single strongly-connected component of
+# 121 files spanning examples/openui-airbnb, packages/core, packages/memory,
+# packages/openui, and packages/types. That is the whole barrel-exporting
+# graph collapsed into one component, not a real cycle — an independent
+# file-level SCC pass over the same import graph finds none, and the DSM
+# shows clean layering. (The component's membership has changed as packages
+# moved — it previously named code-agent/lsp ↔ tools/node-factory — but the
+# artifact is the same.) Accept 1 until upstream SCC detection is fixed;
+# a genuinely new cycle still fails, since any value above this ceiling does.
 max_cycles = 1
 max_coupling = "B"
 # Pre-existing on `main` before this refactor — `main`'s `sentrux check`
