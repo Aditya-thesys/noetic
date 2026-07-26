@@ -1,7 +1,7 @@
 import type { ZodType } from 'zod';
 import type { Channel, ChannelHandle, ExternalChannel } from './channel';
 import type { LLMResponse, ModelParams, ServerToolSpec } from './common';
-import type { Context, CwdState } from './context';
+import type { Context, CwdState, RestoreContextOptions } from './context';
 import type { DetachedHandle } from './detached';
 import type { FsAdapter } from './fs-adapter';
 import type { HarnessResponse, StreamEvent, StreamingItem } from './harness-result';
@@ -311,7 +311,12 @@ export interface AgentHarnessContract<
   storeLayers(layers: MemoryLayer[], response: LLMResponse, ctx: Context): Promise<void>;
   disposeLayers(layers: MemoryLayer[], ctx: Context): Promise<void>;
   checkpoint(ctx: Context): Promise<void>;
-  restore(executionId: string): Promise<Context | null>;
+  /**
+   * Rebuild a `Context` from a persisted snapshot. `opts` carries the wiring
+   * the host attached when it created the original context — without it a
+   * decorated context is silently replaced by a bare one on resume.
+   */
+  restore(executionId: string, opts?: RestoreContextOptions): Promise<Context | null>;
   cancel(ctx: Context, reason?: string): Promise<void>;
   /** Trace exporter spans are flushed to. Defaults to a no-op exporter. */
   readonly traceExporter: TraceExporter;

@@ -244,7 +244,7 @@ When the harness is constructed with a `checkpointStore` (and, typically, a dura
 | Method | Description |
 |---|---|
 | `checkpoint(ctx)` | Snapshot execution state (frontier, layer states, cwd, ask-user queue, item log) through the configured `checkpointStore`. Fires automatically after every `execute()`, `detachedSpawn()` settle, ask-user enqueue, and `runAppendPipeline`. Keyed by `ctx.id`; idempotent. |
-| `restore(executionId)` | Rebuild a `Context` from a previously saved snapshot. Returns `null` when no snapshot exists. Throws `NoeticConfigError` with `code: 'CHECKPOINT_SCHEMA_MISMATCH'` when the persisted `schemaVersion` is unrecognised. |
+| `restore(executionId, opts?)` | Rebuild a `Context` from a previously saved snapshot. Returns `null` when no snapshot exists. Throws `NoeticConfigError` with `code: 'CHECKPOINT_SCHEMA_MISMATCH'` when the persisted `schemaVersion` is unrecognised. `opts` is a `RestoreContextOptions` (`parent` / `state` / `memory`) carrying back the host wiring a snapshot cannot serialise — see [Restoring a decorated context](/docs/framework/durability#restoring-a-decorated-context). |
 | `cancel(ctx, reason?)` | Cancel a running execution. |
 
 The `subprocess` adapter is the companion surface: it persists handle manifests for every long-lived child so a restarted host can call `harness.subprocess.listLive()` + `harness.restore(executionId)` per live child to rejoin the execution. Full durable-execution model, storage layout, and IPC protocol live on the [Durability](/docs/framework/durability) page.
