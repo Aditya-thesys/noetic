@@ -13,6 +13,7 @@
  */
 
 import type { StorageAdapter } from '@noetic-tools/memory';
+import { storageGetMany } from '@noetic-tools/memory';
 import { z } from 'zod';
 
 /** @public One completed step, keyed by its execution path. */
@@ -62,10 +63,15 @@ export function createStepLedgerStore(opts: { storage: StorageAdapter }): StepLe
     },
     load: async (executionId) => {
       const keys = await storage.list(stepLedgerPrefix(executionId));
+      /* One batch read, not one round trip per completed step. Recovery is the
+       * moment a network-backed adapter can least afford an N+1. */
+      const entries = await storageGetMany<unknown>(storage, keys);
       const byPath = new Map<string, StepLedgerEntry>();
+      // Walk `keys`, not the map: `seqKey`'s zero-padding makes `list()` order
+      // dispatch order, and a later entry at a path must win over an earlier one.
       for (const key of keys) {
-        const raw = await storage.get(key);
-        if (raw === null || raw === undefined) {
+        const raw = entries.get(key);
+        if (raw === undefined) {
           continue;
         }
         const parsed = StepLedgerEntrySchema.safeParse(raw);

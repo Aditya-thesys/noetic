@@ -2,7 +2,7 @@
 
 > **Module:** `@noetic-tools/memory` (source at `packages/memory/src/**`); the `MemoryLayer` contract is owned by `@noetic-tools/types` (`packages/types/src/types/memory.ts`, also at the `@noetic-tools/types/contract` subpath). Both are re-exported by `@noetic-tools/core`.
 > **Depends On:** `07-context-and-event-log` (ItemLog, Item — type import only), `10-observability` (MemoryTraceSpan, trace conventions), `04-spawn` (SpawnOpts — referenced in SpawnParams)
-> **Exports:** `MemoryLayer`, `MemoryHooks`, `MemoryScope`, `BudgetConfig`, `Slot`, `InitParams`, `InitResult`, `RecallParams`, `RecallResult`, `StoreParams`, `StoreResult`, `SpawnParams`, `SpawnResult`, `ReturnParams`, `ReturnResult`, `CompleteParams`, `DisposeParams`, `BeforeToolCallParams`, `BeforeToolCallResult`, `AfterModelCallParams`, `AfterModelCallResult`, `OnItemAppendParams`, `OnItemAppendResult`, `RerenderScope`, `ParentUpdateParams`, `ParentUpdateResult`, `ExecutionOutcome`, `ExecutionContext`, `ScopedStorage`, `StorageAdapter`, `ProjectionPolicy`, `LayerTimeouts`, `LayerProvides`, `LayerDataDecl`, `LayerFunctionDecl`, `MemoryConfig`, `InferMemory`, `InferMemoryShape`, `layerData`, `layerFn`, `memory`
+> **Exports:** `MemoryLayer`, `MemoryHooks`, `MemoryScope`, `BudgetConfig`, `Slot`, `InitParams`, `InitResult`, `RecallParams`, `RecallResult`, `StoreParams`, `StoreResult`, `SpawnParams`, `SpawnResult`, `ReturnParams`, `ReturnResult`, `CompleteParams`, `DisposeParams`, `BeforeToolCallParams`, `BeforeToolCallResult`, `AfterModelCallParams`, `AfterModelCallResult`, `OnItemAppendParams`, `OnItemAppendResult`, `RerenderScope`, `ParentUpdateParams`, `ParentUpdateResult`, `ExecutionOutcome`, `ExecutionContext`, `ScopedStorage`, `StorageAdapter`, `ProjectionPolicy`, `LayerTimeouts`, `LayerProvides`, `LayerDataDecl`, `LayerFunctionDecl`, `MemoryConfig`, `InferMemory`, `InferMemoryShape`, `layerData`, `layerFn`, `memory`, `storageGetMany`
 
 ## Module Boundary
 
@@ -497,6 +497,7 @@ interface ScopedStorage {
   set<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
   list(prefix?: string): Promise<string[]>;
+  getMany<T>(keys: string[]): Promise<Map<string, T>>;
 }
 ```
 
@@ -659,8 +660,36 @@ interface StorageAdapter {
   set<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<string[]>;
+  getMany?<T>(keys: string[]): Promise<Map<string, T>>;
 }
 ```
+
+### Batch Reads
+
+`list(prefix)` returns keys, not values, so every consumer that wants the values
+behind a prefix reads them afterwards — structurally an N+1. On an in-memory
+adapter that costs nothing; on a D1- or network-backed one it is a query per key,
+and the places that do it (the step ledger's `load`, the embedding cache) are on
+recovery and startup paths where a burst of round trips hurts most.
+
+`getMany` collapses those reads into one call. It is **optional** so adapters
+written before it existed remain valid, which means no consumer may call it
+directly. They call `storageGetMany(storage, keys)` instead — it delegates when
+the backend implements the method and sweeps `get` in parallel when it does not.
+
+Keys with no stored value are **absent** from the returned map. The map is never
+sparse-with-nulls, so `map.size < keys.length` is how a caller sees that
+something was missing, and a falsy stored value (`0`, `''`, `false`) is present
+rather than mistaken for absence.
+
+The returned map carries no ordering guarantee: a backend may return rows in
+whatever order the underlying query produced. A caller whose correctness depends
+on order (the ledger, where a later entry at a path must win over an earlier one)
+must iterate its own key list and look values up, not iterate the map.
+
+`ScopedStorage` exposes `getMany` as a **required** method — the scoped wrapper
+supplies the fallback, so a layer author never checks for it. Its returned keys
+are scope-relative, with the namespace prefix stripped, as with `list`.
 
 ### Serialization Constraint
 

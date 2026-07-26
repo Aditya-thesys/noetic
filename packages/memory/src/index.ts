@@ -36,4 +36,5 @@ export * from './memory/layers/tool-memory-layer';
 export * from './memory/layers/working-memory';
 export * from './memory/projector';
 export * from './memory/scope';
+export * from './memory/storage-batch';
 export * from './memory/strip-unresolved';

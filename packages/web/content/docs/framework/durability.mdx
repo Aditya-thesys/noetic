@@ -90,6 +90,18 @@ if (restored !== null) {
 
 Returns `null` when no snapshot is recorded. Throws `NoeticConfigError` with `code: 'CHECKPOINT_SCHEMA_MISMATCH'` when the persisted `schemaVersion` is unknown — callers discard via `checkpointStore.clear(executionId)` and start fresh.
 
+### Implement `getMany` on a networked adapter
+
+The step ledger stores one key per completed step, so restoring an execution means reading every key under `execution:<id>:ledger:`. `StorageAdapter` declares an optional batch read for exactly this:
+
+```ts validate=none
+getMany?<T>(keys: string[]): Promise<Map<string, T>>;
+```
+
+Implement it and a restore is one query. Omit it and the framework falls back to a parallel `get` per key — correct, but on a D1- or HTTP-backed store that is a round trip per step of the resumed run, arriving all at once on the recovery path. Missing keys must be absent from the returned map rather than mapped to `null`.
+
+The built-in `createInMemoryStorage()` and `createFileStorage()` both implement it.
+
 ### Limitations
 
 Durable execution can replay a step body whose prior completion's checkpoint failed to land. The framework cannot make arbitrary `step.run` bodies idempotent — write bodies that are safe to re-execute where durability matters, or gate with an external idempotency key.

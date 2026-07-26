@@ -5,6 +5,8 @@ import type {
   StorageAdapter,
 } from '@noetic-tools/types';
 
+import { storageGetMany } from './storage-batch';
+
 export function resolveScopeKey(scope: MemoryScope, ctx: ExecutionContext): string {
   switch (scope) {
     case 'thread':
@@ -38,6 +40,19 @@ export function createScopedStorage(
       const fullPrefix = keyPrefix ? `${prefix}${keyPrefix}` : prefix;
       const keys = await storage.list(fullPrefix);
       return keys.map((k) => (k.startsWith(prefix) ? k.slice(prefix.length) : k));
+    },
+    async getMany<T>(keys: string[]): Promise<Map<string, T>> {
+      const scoped = await storageGetMany<T>(
+        storage,
+        keys.map((k) => `${prefix}${k}`),
+      );
+      // Hand back the keys the caller passed in, not the namespaced ones —
+      // `list` already strips the prefix and a layer never sees it otherwise.
+      const unscoped = new Map<string, T>();
+      for (const [key, value] of scoped) {
+        unscoped.set(key.startsWith(prefix) ? key.slice(prefix.length) : key, value);
+      }
+      return unscoped;
     },
   };
 }

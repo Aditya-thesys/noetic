@@ -1,4 +1,5 @@
 import type { ContextMemory, StorageAdapter } from '@noetic-tools/memory';
+import { storageGetMany } from '@noetic-tools/memory';
 import type { Context, Step } from '@noetic-tools/types';
 import { createMessage, extractAssistantText, trackUsage } from '@noetic-tools/types';
 import { z } from 'zod';
@@ -47,11 +48,13 @@ async function getLabelVectors(
   if (ref.storage) {
     const storage = ref.storage;
     const keys = labels.map(hashLabel);
-    const fetched = await Promise.all(keys.map((k) => storage.get<number[]>(k)));
+    // One batch read where the adapter supports it, a parallel `get` sweep where
+    // it does not — either way, not one round trip per label.
+    const cached = await storageGetMany<number[]>(storage, keys);
 
     const missingIndices: number[] = [];
-    for (let i = 0; i < fetched.length; i++) {
-      if (!fetched[i]) {
+    for (let i = 0; i < keys.length; i++) {
+      if (!cached.has(keys[i])) {
         missingIndices.push(i);
       }
     }
@@ -66,8 +69,8 @@ async function getLabelVectors(
 
     const results: number[][] = new Array(labels.length);
     let freshIndex = 0;
-    for (let i = 0; i < fetched.length; i++) {
-      results[i] = fetched[i] ?? freshEmbeddings[freshIndex++];
+    for (let i = 0; i < keys.length; i++) {
+      results[i] = cached.get(keys[i]) ?? freshEmbeddings[freshIndex++];
     }
     return results;
   }

@@ -154,6 +154,7 @@ export {
   planMemory,
   staticContent,
   steering,
+  storageGetMany,
   stripUnresolvedToolCalls,
   temporalMemory,
   toolMemoryLayer,
