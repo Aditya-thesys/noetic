@@ -1,3 +1,8 @@
+## @noetic-tools/core-v3.2.0 (2026-07-26)
+
+* fix(core): cascade abort to child contexts and implement harness.cancel ([6d36c97](https://github.com/mattapperson/noetic/commit/6d36c97))
+* feat(core): bound step-ledger retention by entry size and count ([dc6d338](https://github.com/mattapperson/noetic/commit/dc6d338))
+
 ## @noetic-tools/core-v3.1.0 (2026-07-26)
 
 * feat(core): let restore() take the caller's context wiring ([2f28912](https://github.com/mattapperson/noetic/commit/2f28912)), closes [#59](https://github.com/mattapperson/noetic/issues/59)
