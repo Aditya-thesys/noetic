@@ -1,3 +1,7 @@
+## @noetic-tools/core-v2.5.0 (2026-07-26)
+
+* feat(core): step-level resume via a completion ledger ([2dfe7e3](https://github.com/mattapperson/noetic/commit/2dfe7e3))
+
 ## @noetic-tools/core-v2.4.0 (2026-07-24)
 
 * feat(core): accept a ui declaration on the tool builders ([343915a](https://github.com/mattapperson/noetic/commit/343915a))
