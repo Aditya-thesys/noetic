@@ -1,3 +1,17 @@
+## @noetic-tools/openui-v2.0.0 (2026-07-26)
+
+* feat(core): batch read on StorageAdapter, so ledger restore is not an N+1 ([6bb7b87](https://github.com/mattapperson/noetic/commit/6bb7b87)), closes [#58](https://github.com/mattapperson/noetic/issues/58)
+
+### BREAKING CHANGE
+
+* `ScopedStorage` gains a required `getMany` method. Code
+that implements the interface directly — in practice only test doubles, as
+the framework constructs the real one via `createScopedStorage` — must add
+it. `StorageAdapter.getMany` is optional and breaks nothing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Bp3JE94xvmxr4WWZ2bYjJJ
+
 ## @noetic-tools/openui-v1.1.1 (2026-07-24)
 
 * fix(web): make the generative-UI docs typecheck ([211dea9](https://github.com/mattapperson/noetic/commit/211dea9))
