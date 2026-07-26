@@ -8,6 +8,7 @@
  * Run from `compat/`: `bun run smoke:browser` (after `build:bundles`).
  */
 
+import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -23,6 +24,41 @@ const PROXY_CORS_HEADERS: Record<string, string> = {
   'access-control-allow-methods': '*',
   'access-control-allow-headers': '*',
 };
+
+/** Browser-set headers that describe the page's connection, not the upstream call. */
+const DROPPED_REQUEST_HEADERS = new Set([
+  'host',
+  'connection',
+  'content-length',
+  'accept-encoding',
+  'origin',
+  'referer',
+]);
+
+/** Response headers that describe the upstream framing of an already-decoded body. */
+const DROPPED_RESPONSE_HEADERS = new Set([
+  'content-encoding',
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'set-cookie',
+]);
+
+function forwardableRequestHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => !DROPPED_REQUEST_HEADERS.has(name.toLowerCase())),
+  );
+}
+
+function forwardableResponseHeaders(headers: Headers): Record<string, string> {
+  const forwarded: Record<string, string> = {};
+  headers.forEach((value, name) => {
+    if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) {
+      forwarded[name] = value;
+    }
+  });
+  return forwarded;
+}
 
 const PAGE_HTML = `<!doctype html>
 <html>
@@ -95,25 +131,40 @@ async function main(): Promise<void> {
 
     // OpenRouter's CORS policy rejects the SDK's custom `x-openrouter-callmodel`
     // header on preflight, so a browser cannot call it directly — real browser
-    // apps proxy LLM calls through their own backend. Playwright stands in for
-    // that proxy: it forwards the request server-side (no CORS) and returns the
-    // response with permissive CORS headers, so the in-page noetic code runs
+    // apps proxy LLM calls through their own backend. This handler stands in for
+    // that proxy: it forwards the request from this process (no CORS) and returns
+    // the response with permissive CORS headers, so the in-page noetic code runs
     // unmodified. This proves core + code-agent load and execute in the browser.
+    //
+    // The forward deliberately does NOT use Playwright's own `route.fetch()`:
+    // playwright-core 1.50's server-side fetch parses `set-cookie` against the
+    // response URL, and OpenRouter's response reaches it as a bare path, so
+    // `new URL('/api/v1/responses')` throws ERR_INVALID_URL. The route then
+    // never fulfills, the in-page fetch hangs, and the smoke times out after
+    // 60s — which is how this target had been failing.
     await page.route('https://openrouter.ai/**', async (route) => {
-      if (route.request().method() === 'OPTIONS') {
+      const request = route.request();
+      if (request.method() === 'OPTIONS') {
         await route.fulfill({
           status: 204,
           headers: PROXY_CORS_HEADERS,
         });
         return;
       }
-      const response = await route.fetch();
+      const upstream = await fetch(request.url(), {
+        method: request.method(),
+        headers: forwardableRequestHeaders(await request.allHeaders()),
+        body: request.postDataBuffer() ?? undefined,
+      });
+      // `fetch` already decoded the body, so the upstream framing headers would
+      // describe it wrongly; Chromium rejects the response if they survive.
       await route.fulfill({
-        response,
+        status: upstream.status,
         headers: {
-          ...response.headers(),
+          ...forwardableResponseHeaders(upstream.headers),
           ...PROXY_CORS_HEADERS,
         },
+        body: Buffer.from(await upstream.arrayBuffer()),
       });
     });
 

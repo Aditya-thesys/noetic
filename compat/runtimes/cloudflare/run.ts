@@ -100,8 +100,11 @@ async function runDeploy(apiKey: string, model: string | undefined): Promise<Smo
 
   try {
     console.log(`• worker live at ${url}; invoking`);
-    // Newly-propagated workers can 404/525 briefly; retry a few times.
-    const result = await fetchWithRetry(url, 5);
+    // `wrangler deploy` returns before the *.workers.dev route is globally
+    // resolvable, and until it is the edge answers Cloudflare's 404 page. It
+    // usually settles in under a second, but a cold first deploy of the name
+    // has taken longer than the previous 15s budget — retry for up to a minute.
+    const result = await fetchWithRetry(url, 20);
     return result;
   } finally {
     console.log(`• deleting ${WORKER_NAME}`);
@@ -113,19 +116,64 @@ async function runDeploy(apiKey: string, model: string | undefined): Promise<Smo
   }
 }
 
+/** Statuses that mean "the route is not live yet" rather than "the worker is broken". */
+function isPropagationStatus(status: number): boolean {
+  return status === 404 || status >= 500;
+}
+
+/** Cloudflare's 404 page is a full HTML document — keep the log readable. */
+function summarize(body: string): string {
+  const collapsed = body.replace(/\s+/g, ' ').trim();
+  return collapsed.length > 200 ? `${collapsed.slice(0, 200)}…` : collapsed;
+}
+
+type FetchOutcome =
+  | {
+      kind: 'ok';
+      result: SmokeResult;
+    }
+  | {
+      kind: 'retry' | 'fatal';
+      error: unknown;
+    };
+
+async function attemptFetch(url: string): Promise<FetchOutcome> {
+  try {
+    const response = await fetch(url);
+    if (response.ok) {
+      return {
+        kind: 'ok',
+        result: await assertResult(await response.json()),
+      };
+    }
+    return {
+      // A 4xx that is not 404 (bad token, bad request) will not fix itself.
+      kind: isPropagationStatus(response.status) ? 'retry' : 'fatal',
+      error: new Error(`worker responded ${response.status}: ${summarize(await response.text())}`),
+    };
+  } catch (error) {
+    // Connection-level failures are the DNS/route not being live yet.
+    return {
+      kind: 'retry',
+      error,
+    };
+  }
+}
+
 async function fetchWithRetry(url: string, attempts: number): Promise<SmokeResult> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return assertResult(await response.json());
-      }
-      lastError = new Error(`worker responded ${response.status}: ${await response.text()}`);
-    } catch (error) {
-      lastError = error;
+    const outcome = await attemptFetch(url);
+    if (outcome.kind === 'ok') {
+      return outcome.result;
     }
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    lastError = outcome.error;
+    if (outcome.kind === 'fatal') {
+      break;
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+    }
   }
   throw lastError instanceof Error ? lastError : new Error('worker never became reachable');
 }
