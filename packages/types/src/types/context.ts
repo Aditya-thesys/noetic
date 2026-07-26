@@ -74,6 +74,33 @@ export interface ContextDetachedSpawnOverrides {
   cwdInit?: string;
 }
 
+/**
+ * @public Caller-supplied wiring forwarded to the `createContext` call that
+ * `harness.restore()` makes internally.
+ *
+ * A snapshot recovers the item log, layer state, cwd, and identity — it cannot
+ * recover the live objects a host attached when it built the original context
+ * (event broadcasters, queues, per-host state). Pass the same wiring here that
+ * was passed to `createContext` originally, or the resumed run silently loses
+ * it.
+ *
+ * Snapshot-owned fields (`items`, `threadId`, `resourceId`, `cwdInit`) are
+ * deliberately absent: they always come from the persisted snapshot, so
+ * accepting them here would only offer a value that gets ignored.
+ *
+ * Anything a host attaches *after* construction — `Object.assign`ed fields,
+ * abort registration — stays the host's responsibility and can be applied to
+ * the context `restore()` returns.
+ */
+export interface RestoreContextOptions {
+  /** Live parent context, when the restored execution hangs under one. */
+  parent?: Context;
+  /** Opaque per-execution state, same as `createContext({ state })`. */
+  state?: unknown;
+  /** Memory layers for the restored context. Defaults to the harness's configured layers. */
+  memory?: MemoryLayer[];
+}
+
 export interface ContextRerenderRequest {
   layerId: string;
   slot: number;
@@ -211,7 +238,7 @@ export interface ContextHarness {
   initLayers(layers: MemoryLayer[], ctx: Context, storage: StorageAdapter): Promise<void>;
   disposeLayers(layers: MemoryLayer[], ctx: Context): Promise<void>;
   checkpoint(ctx: Context): Promise<void>;
-  restore(executionId: string): Promise<Context | null>;
+  restore(executionId: string, opts?: RestoreContextOptions): Promise<Context | null>;
   cancel(ctx: Context, reason?: string): Promise<void>;
   /** Trace exporter spans are flushed to. Defaults to a no-op exporter. */
   readonly traceExporter: TraceExporter;

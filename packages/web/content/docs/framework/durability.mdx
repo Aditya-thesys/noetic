@@ -102,6 +102,35 @@ Implement it and a restore is one query. Omit it and the framework falls back to
 
 The built-in `createInMemoryStorage()` and `createFileStorage()` both implement it.
 
+### Restoring a decorated context
+
+A snapshot recovers **data**, not the **live objects** a host attached when it built the original context — event broadcasters, message queues, abort registrations. Restore without them and the host gets a bare context back. Nothing throws; streaming and mid-turn injection just stop working, on precisely the runs that already crashed once.
+
+`restore()` takes an optional second argument shaped like `createContext`, so a host hands back the wiring it supplied the first time:
+
+```ts
+declare const harness: AgentHarness;
+declare const executionId: string;
+declare const sessionState: { queue: unknown };
+
+const restored = await harness.restore(executionId, {
+  state: sessionState,
+});
+```
+
+```ts validate=none
+interface RestoreContextOptions {
+  parent?: Context;
+  state?: unknown;
+  memory?: MemoryLayer[];
+}
+```
+
+Two rules:
+
+- **Snapshot-owned fields are not accepted.** `items`, `threadId`, `resourceId`, and `cwd` always come from the persisted record — they are absent from `RestoreContextOptions` so you cannot pass a value that would be silently ignored. Caller options are applied first and the snapshot's values overwrite them, so the record always wins.
+- **Post-construction decoration is still yours.** Fields you `Object.assign` onto a context, and abort registration, belong on the context `restore()` returns. Its `id` is already the original `executionId`, so anything keyed by execution id lands on the right key.
+
 ### Limitations
 
 Durable execution can replay a step body whose prior completion's checkpoint failed to land. The framework cannot make arbitrary `step.run` bodies idempotent — write bodies that are safe to re-execute where durability matters, or gate with an external idempotency key.
@@ -139,7 +168,7 @@ for (const [handleId, ctx] of contexts) {
 }
 ```
 
-The helper calls `harness.subprocess.listLive()`, then `harness.restore(executionId)` for every handle that carries an `executionId`. With no durable storage configured the call is a cheap no-op.
+The helper calls `harness.subprocess.listLive()`, then `harness.restore(executionId)` for every handle that carries an `executionId`. With no durable storage configured the call is a cheap no-op. A host that decorates its contexts re-applies that wiring per restored context — see [Restoring a decorated context](#restoring-a-decorated-context).
 
 ## Durable IPC
 

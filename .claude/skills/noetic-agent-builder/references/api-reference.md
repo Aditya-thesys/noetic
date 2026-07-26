@@ -1249,6 +1249,20 @@ function createCheckpointStore(opts: { storage: StorageAdapter }): CheckpointSto
 
 Pass a `checkpointStore` to the harness constructor to turn `harness.checkpoint(ctx)` and `harness.restore(executionId)` into real crash-recovery hooks. Snapshots fire automatically after every `execute()`, `detachedSpawn()` settlement, ask-user enqueue, and `runAppendPipeline`. Failures are swallowed with `console.warn` so durability issues never abort a successful step.
 
+#### Restoring a decorated context
+
+```typescript
+interface RestoreContextOptions {
+  parent?: Context;
+  state?: unknown;
+  memory?: MemoryLayer[];
+}
+
+harness.restore(executionId: string, opts?: RestoreContextOptions): Promise<Context | null>;
+```
+
+A snapshot recovers data, not the live objects a host attached to the original context (broadcasters, queues, abort registrations). Pass them back through `opts` or the resumed run gets a bare context and the loss is silent. Snapshot-owned fields (`items`, `threadId`, `resourceId`, cwd) are deliberately not accepted — they always come from the persisted record. Decoration applied after construction (`Object.assign`ed fields, abort registration) goes on the returned context, whose `id` is already the original `executionId`.
+
 ### `createFileStorage`
 
 ```typescript

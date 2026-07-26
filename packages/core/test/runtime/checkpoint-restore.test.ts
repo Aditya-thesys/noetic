@@ -8,10 +8,18 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import assert from 'node:assert';
+import type { MemoryLayer } from '@noetic-tools/memory';
+import { Slot } from '@noetic-tools/memory';
+import type { Item } from '@noetic-tools/types';
 import { AgentHarness } from '../../src/harness/agent-harness';
+import { getBroadcaster } from '../../src/runtime/broadcaster-utils';
 import { createCheckpointStore } from '../../src/runtime/durable/checkpoint-store';
+import type { RestoreCheckpointOptions } from '../../src/runtime/durable/harness-checkpoints';
+import { EventBroadcaster } from '../../src/runtime/event-broadcaster';
 import { createInMemoryStorage } from '../../src/runtime/in-memory-storage';
 import type { CheckpointSnapshot } from '../../src/types/checkpoint';
+import { makeMessage } from '../_helpers';
 
 describe('CheckpointStore', () => {
   it('save → load round-trips a snapshot through the StorageAdapter', async () => {
@@ -177,3 +185,168 @@ describe('AgentHarness.checkpoint + restore', () => {
     expect(await h.restore('never-stored')).toBeNull();
   });
 });
+
+//#region restore(executionId, opts) — caller-supplied context wiring
+
+function makeLayer(id: string, slot: number): MemoryLayer {
+  return {
+    id,
+    name: id,
+    slot,
+    scope: 'execution',
+    hooks: {},
+  };
+}
+
+/**
+ * A harness pair over one shared store: `origin` creates + checkpoints the
+ * pre-crash context, `resumed` stands in for the process that came back up.
+ */
+function makeHarnessPair(memory?: MemoryLayer[]): {
+  origin: AgentHarness;
+  resumed: AgentHarness;
+} {
+  const storage = createInMemoryStorage();
+  const checkpointStore = createCheckpointStore({
+    storage,
+  });
+  const config = {
+    name: 'noeticTest',
+    params: {},
+    storage,
+    checkpointStore,
+    memory,
+  };
+  return {
+    origin: new AgentHarness(config),
+    resumed: new AgentHarness(config),
+  };
+}
+
+describe('AgentHarness.restore context wiring', () => {
+  it('forwards the caller broadcaster so a resumed turn keeps streaming', async () => {
+    const { origin, resumed } = makeHarnessPair();
+    const broadcaster = new EventBroadcaster();
+    const ctx = origin.createContext({
+      _broadcaster: broadcaster,
+    });
+    await origin.checkpoint(ctx);
+
+    const restored = await resumed.restore(ctx.id, {
+      _broadcaster: broadcaster,
+    });
+    assert(restored);
+    expect(getBroadcaster(restored)).toBe(broadcaster);
+  });
+
+  it('restores a bare context when the caller supplies no wiring', async () => {
+    const { origin, resumed } = makeHarnessPair();
+    const ctx = origin.createContext({
+      _broadcaster: new EventBroadcaster(),
+    });
+    await origin.checkpoint(ctx);
+
+    // The regression this documents: wiring is not recoverable from a snapshot,
+    // so omitting `opts` still yields an undecorated context — by design, not by
+    // accident. Hosts must pass their wiring back in.
+    const restored = await resumed.restore(ctx.id);
+    assert(restored);
+    expect(getBroadcaster(restored)).toBeUndefined();
+  });
+
+  it('forwards caller state and parent onto the restored context', async () => {
+    const { origin, resumed } = makeHarnessPair();
+    const ctx = origin.createContext({});
+    await origin.checkpoint(ctx);
+
+    const parent = resumed.createContext({});
+    const restored = await resumed.restore(ctx.id, {
+      parent,
+      state: {
+        sessionQueue: 'live-object',
+      },
+    });
+    assert(restored);
+    expect(restored.parent).toBe(parent);
+    expect(restored.depth).toBe(parent.depth + 1);
+    expect(restored.state).toEqual({
+      sessionQueue: 'live-object',
+    });
+  });
+
+  it('caller memory layers override the harness defaults on restore', async () => {
+    const harnessLayer = makeLayer('harness-layer', Slot.STEERING);
+    const { origin, resumed } = makeHarnessPair([
+      harnessLayer,
+    ]);
+    const ctx = origin.createContext({});
+    await origin.checkpoint(ctx);
+
+    const restored = await resumed.restore(ctx.id, {
+      memory: [
+        makeLayer('call-layer', Slot.WORKING_MEMORY),
+      ],
+    });
+    assert(restored);
+    assert(restored.layers);
+    expect(restored.layers.map((l) => l.id)).toEqual([
+      'call-layer',
+    ]);
+  });
+
+  it('falls back to the harness memory layers when the caller omits them', async () => {
+    const { origin, resumed } = makeHarnessPair([
+      makeLayer('harness-layer', Slot.STEERING),
+    ]);
+    const ctx = origin.createContext({});
+    await origin.checkpoint(ctx);
+
+    const restored = await resumed.restore(ctx.id, {
+      state: {},
+    });
+    assert(restored);
+    assert(restored.layers);
+    expect(restored.layers.map((l) => l.id)).toEqual([
+      'harness-layer',
+    ]);
+  });
+
+  it('snapshot-owned fields win over anything the caller passes', async () => {
+    const { origin, resumed } = makeHarnessPair();
+    const ctx = origin.createContext({
+      threadId: 'thread-from-snapshot',
+      resourceId: 'resource-from-snapshot',
+      cwdInit: '/tmp/snapshot-cwd',
+      items: [
+        makeMessage('user', 'recorded before the crash'),
+      ],
+    });
+    await origin.checkpoint(ctx);
+
+    /* `RestoreContextOptions` deliberately omits these, so a caller can only get
+     * here by widening the type — the assertion locks the precedence rather than
+     * the compile error. */
+    const rogue: RestoreCheckpointOptions & {
+      threadId?: string;
+      resourceId?: string;
+      cwdInit?: string;
+      items?: Item[];
+    } = {
+      threadId: 'hijacked',
+      resourceId: 'hijacked',
+      cwdInit: '/tmp/hijacked',
+      items: [
+        makeMessage('user', 'never happened'),
+      ],
+    };
+    const restored = await resumed.restore(ctx.id, rogue);
+    assert(restored);
+    expect(restored.id).toBe(ctx.id);
+    expect(restored.threadId).toBe('thread-from-snapshot');
+    expect(restored.resourceId).toBe('resource-from-snapshot');
+    expect(restored.cwdState.cwd).toBe('/tmp/snapshot-cwd');
+    expect(restored.itemLog.items).toHaveLength(1);
+  });
+});
+
+//#endregion

@@ -1,13 +1,27 @@
 import type { LayerStateStore, MemoryLayer } from '@noetic-tools/memory';
-import type { Context, Item, ItemSchemaRegistry } from '@noetic-tools/types';
+import type { Context, Item, ItemSchemaRegistry, RestoreContextOptions } from '@noetic-tools/types';
 import type { CheckpointSnapshot, FrontierFrame } from '../../types/checkpoint';
 import { CheckpointSchemaVersion } from '../../types/checkpoint';
 import { ContextImpl } from '../context-impl';
+import type { EventBroadcaster } from '../event-broadcaster';
 import type { CheckpointStore } from './checkpoint-store';
 import type { StepLedgerStore } from './step-ledger';
 import { StepLedger } from './step-ledger';
 
 //#region Handle interface
+
+/**
+ * Host wiring forwarded into the context `restoreFromCheckpoint` builds.
+ * `RestoreContextOptions` covers the portable fields; core widens it with the
+ * internal `_broadcaster` seam so a resumed turn keeps streaming framework UI
+ * events.
+ *
+ * @internal
+ */
+export type RestoreCheckpointOptions = RestoreContextOptions & {
+  /** @internal Event broadcaster the host attached to the original context. */
+  _broadcaster?: EventBroadcaster;
+};
 
 /**
  * Minimum harness surface `captureCheckpoint` / `restoreFromCheckpoint`
@@ -23,13 +37,14 @@ export interface CheckpointHarnessHandle {
   readonly layerStateStore: LayerStateStore;
   readonly itemSchemas: ItemSchemaRegistry;
   readonly _memory?: MemoryLayer[];
-  createContext(opts?: {
-    items?: Item[];
-    threadId?: string;
-    resourceId?: string;
-    cwdInit?: string;
-    memory?: MemoryLayer[];
-  }): Context;
+  createContext(
+    opts?: RestoreCheckpointOptions & {
+      items?: Item[];
+      threadId?: string;
+      resourceId?: string;
+      cwdInit?: string;
+    },
+  ): Context;
 }
 
 //#endregion
@@ -103,6 +118,14 @@ export async function captureCheckpoint(h: CheckpointHarnessHandle, ctx: Context
  * the restored context observes the pre-crash state through
  * `readLayerState` and the memory projectors.
  *
+ * `opts` carries the host's own context wiring (broadcaster, parent, state,
+ * layer overrides) into the rebuilt context. A snapshot cannot round-trip live
+ * objects, so a host that decorated the original context has to hand the same
+ * decoration back here — otherwise the resumed run gets a bare context and
+ * whatever depended on that wiring stops working silently. Snapshot-owned
+ * fields always win: identity, item log, and cwd come from the persisted
+ * record, never from `opts`.
+ *
  * Preserves the original executionId on the returned context via
  * `Object.defineProperty` — adapter correlation across crash/restart
  * requires a stable id.
@@ -112,6 +135,7 @@ export async function captureCheckpoint(h: CheckpointHarnessHandle, ctx: Context
 export async function restoreFromCheckpoint(
   h: CheckpointHarnessHandle,
   executionId: string,
+  opts?: RestoreCheckpointOptions,
 ): Promise<Context | null> {
   const store = h.checkpointStore;
   if (!store) {
@@ -126,12 +150,16 @@ export async function restoreFromCheckpoint(
   }
   const items: Item[] = h.itemSchemas.parseMany(snapshot.itemLog.items);
   const cwdInit = snapshot.cwd?.current ?? undefined;
+  /* Caller wiring first, snapshot second: a host may legitimately swap the memory
+   * layers or hang the restored execution under a new parent, but it must never be
+   * able to override the identity/history the snapshot is the record of. */
   const ctx = h.createContext({
+    ...opts,
     items,
     threadId: snapshot.threadId,
     resourceId: snapshot.resourceId,
     cwdInit,
-    memory: h._memory,
+    memory: opts?.memory ?? h._memory,
   });
   if (ctx instanceof ContextImpl) {
     Object.defineProperty(ctx, 'id', {
