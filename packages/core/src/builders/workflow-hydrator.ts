@@ -27,6 +27,7 @@ import { DetachedHandleImpl } from '../runtime/detached-handle';
 import type {
   LlmWorkflowNode,
   OutputCodecRef,
+  SubflowWorkflowNode,
   UntilPredicate,
   WorkflowDocument,
   WorkflowNode,
@@ -63,6 +64,17 @@ export interface HydrationContext {
    * `ctx.subprocess` at execution time.
    */
   resolveSubprocess?: (ref: string) => SubprocessAdapter | undefined;
+  /**
+   * Named sub-workflow documents that `subflow` nodes resolve via `ref`.
+   * Resolution is lazy (first execution), so a live map view may gain
+   * entries after hydration.
+   */
+  workflows?: ReadonlyMap<string, WorkflowDocument>;
+  /**
+   * Ancestor ref chain for cycle detection on named sub-workflow references.
+   * Threaded internally by the subflow hydrator — callers never set it.
+   */
+  subflowAncestry?: ReadonlySet<string>;
 }
 
 interface SubHarnessBuilderOpts {
@@ -566,6 +578,90 @@ function hydrateSubHarnessNode(
   });
 }
 
+/**
+ * Hydrates a `subflow` node lazily: the target document resolves and hydrates
+ * on first execution, memoized. Lazy because `HydrationContext.workflows` may
+ * be a live view that gains entries after hydration, and because it keeps
+ * cycle detection path-scoped — each ref chain threads its own ancestry set,
+ * so diamond reuse of a named workflow is legal while A→B→A throws.
+ */
+function hydrateSubflowNode(
+  node: WorkflowNode,
+  ctx: HydrationContext,
+): Step<ContextMemory, string, string> {
+  if (node.kind !== 'subflow') {
+    return frameworkCast(undefined);
+  }
+  let cached: Step<ContextMemory, string, string> | undefined;
+  const resolve = (): Step<ContextMemory, string, string> => {
+    if (!cached) {
+      const { doc, childCtx } = resolveSubflowDocument(node, ctx);
+      cached = hydrateNode(suffixNodeIds(doc.root, `-${node.id}`), childCtx);
+    }
+    return cached;
+  };
+  return frameworkCast(
+    step.run({
+      id: node.id,
+      execute: async (input: string, execCtx: Context) => {
+        const child = resolve();
+        return stringifyResult(await ctx.executeStep(child, node.input ?? input, execCtx));
+      },
+    }),
+  );
+}
+
+function resolveSubflowDocument(
+  node: SubflowWorkflowNode,
+  ctx: HydrationContext,
+): {
+  doc: WorkflowDocument;
+  childCtx: HydrationContext;
+} {
+  if (node.document) {
+    // Inline documents are finite JSON trees — they cannot cycle, so they
+    // add nothing to the ancestry chain.
+    return {
+      doc: node.document,
+      childCtx: ctx,
+    };
+  }
+  const ref = node.ref ?? '';
+  const ancestry = ctx.subflowAncestry ?? new Set<string>();
+  if (ancestry.has(ref)) {
+    throw new NoeticConfigError({
+      code: 'WORKFLOW_CYCLE',
+      message: `Sub-workflow '${ref}' referenced in subflow node '${node.id}' forms a reference cycle (${[
+        ...ancestry,
+        ref,
+      ].join(' -> ')}).`,
+      hint: 'A named sub-workflow may not reference itself, directly or transitively. Break the cycle or inline the document.',
+    });
+  }
+  const doc = ctx.workflows?.get(ref);
+  if (!doc) {
+    throw new NoeticConfigError({
+      code: 'UNKNOWN_WORKFLOW_REFERENCE',
+      message: `Sub-workflow '${ref}' referenced in subflow node '${node.id}' is not registered.`,
+      hint: `Pass named workflows via HydrationContext.workflows. Available: ${
+        [
+          ...(ctx.workflows?.keys() ?? []),
+        ].join(', ') || '(none)'
+      }.`,
+    });
+  }
+  return {
+    doc,
+    childCtx: {
+      ...ctx,
+      subflowAncestry: new Set([
+        ...ancestry,
+        ref,
+      ]),
+    },
+  };
+}
+
 //#endregion
 
 //#region Handler Registry
@@ -581,6 +677,7 @@ const NODE_HYDRATORS: Record<string, NodeHydrator> = {
   loop: hydrateLoopNode,
   sequence: hydrateSequenceNode,
   every: hydrateEveryNode,
+  subflow: hydrateSubflowNode,
   'claude-code': hydrateSubHarnessNode,
   codex: hydrateSubHarnessNode,
   opencode: hydrateSubHarnessNode,
@@ -821,6 +918,8 @@ async function runCodeViaSubprocess(opts: {
  * @throws `NoeticConfigError` with code `UNKNOWN_NODE_KIND` if the node kind is unrecognised.
  * @throws `NoeticConfigError` with code `UNKNOWN_TOOL_REFERENCE` if a tool name cannot be resolved.
  * @throws `NoeticConfigError` with code `UNKNOWN_UNTIL_PREDICATE` if an until predicate kind is unrecognised.
+ * @throws `NoeticConfigError` with code `UNKNOWN_WORKFLOW_REFERENCE` (at execution time) if a subflow ref names no registered workflow.
+ * @throws `NoeticConfigError` with code `WORKFLOW_CYCLE` (at execution time) if named sub-workflow refs form a cycle.
  */
 export function hydrateNode(
   node: WorkflowNode,

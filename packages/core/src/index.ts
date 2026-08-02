@@ -264,6 +264,7 @@ export type {
   ProvideWorkflowNode,
   SequenceWorkflowNode,
   SpawnWorkflowNode,
+  SubflowWorkflowNode,
   SubHarnessWorkflowNode,
   ToolWorkflowNode,
   UntilPredicate,

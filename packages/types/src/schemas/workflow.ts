@@ -9,8 +9,8 @@
  * document back into live `Step` objects via the existing builders.
  */
 
-import type { SubHarnessKind } from '../types/sub-harness';
 import { z } from 'zod';
+import type { SubHarnessKind } from '../types/sub-harness';
 
 //#region Until Predicate Types
 
@@ -373,6 +373,21 @@ export interface SubHarnessWorkflowNode extends WorkflowNodeBase {
   session?: z.infer<typeof HarnessSessionPolicySchema>;
 }
 
+/**
+ * A node that runs another workflow document as a sub-step. The document is
+ * either inline or a named reference resolved from `HydrationContext.workflows`
+ * at execution time. Supply exactly one of `document` / `ref`.
+ */
+export interface SubflowWorkflowNode extends WorkflowNodeBase {
+  kind: 'subflow';
+  /** Inline sub-workflow. Mutually exclusive with `ref`. */
+  document?: WorkflowDocument;
+  /** Named sub-workflow resolved from `HydrationContext.workflows`. Mutually exclusive with `document`. */
+  ref?: string;
+  /** Literal input passed to the sub-workflow; defaults to the node's runtime input. */
+  input?: string;
+}
+
 /** @public Discriminated union of all JSON-serialisable workflow node kinds. */
 export type WorkflowNode =
   | LlmWorkflowNode
@@ -385,6 +400,7 @@ export type WorkflowNode =
   | LoopWorkflowNode
   | SequenceWorkflowNode
   | EveryWorkflowNode
+  | SubflowWorkflowNode
   | SubHarnessWorkflowNode;
 
 //#endregion
@@ -500,6 +516,20 @@ const EveryNodeSchema = z.object({
     .optional(),
 });
 
+const WorkflowDocumentRef: z.ZodType<WorkflowDocument> = z.lazy(() => WorkflowDocumentSchema);
+
+const SubflowNodeSchema = z
+  .object({
+    kind: z.literal('subflow'),
+    ...SHARED_FIELDS,
+    document: WorkflowDocumentRef.optional(),
+    ref: z.string().min(1).optional(),
+    input: z.string().optional(),
+  })
+  .refine((node) => (node.document === undefined) !== (node.ref === undefined), {
+    message: "subflow node requires exactly one of 'document' (inline) or 'ref' (named).",
+  });
+
 /** Builds the schema for a single harness node kind (`claude-code`, `codex`, …). */
 function subHarnessNodeSchema<K extends SubHarnessKind>(kind: K) {
   return z.object({
@@ -530,6 +560,7 @@ export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z
     LoopNodeSchema,
     SequenceNodeSchema,
     EveryNodeSchema,
+    SubflowNodeSchema,
     ClaudeCodeNodeSchema,
     CodexNodeSchema,
     OpencodeNodeSchema,
@@ -598,6 +629,14 @@ function childNodes(node: WorkflowNode): WorkflowNode[] {
       }
       return children;
     }
+    case 'subflow':
+      // A named ref is a static leaf: the target document is only known at
+      // hydration time, so walk/graph/depth cannot see through it.
+      return node.document
+        ? [
+            node.document.root,
+          ]
+        : [];
     default:
       return [];
   }
@@ -632,6 +671,7 @@ export interface WorkflowGraph {
  * Flattens a workflow tree into a node + edge list — the static "potential
  * paths" of the DAG, suitable for attaching to a trace span so observers can
  * reconstruct the declared graph independent of which branches actually ran.
+ * `subflow` refs are leaves: their target documents resolve at hydration time.
  */
 export function workflowGraph(root: WorkflowNode): WorkflowGraph {
   const nodes: WorkflowGraph['nodes'] = [];
@@ -657,6 +697,7 @@ export function workflowGraph(root: WorkflowNode): WorkflowGraph {
 /**
  * Returns the maximum depth of a workflow tree.
  * Leaf nodes (`llm`, `tool`) have depth 0. Structural nodes add +1.
+ * A `subflow` ref counts as a leaf — depth does not see through named refs.
  */
 export function workflowDepth(node: WorkflowNode): number {
   const children = childNodes(node);
