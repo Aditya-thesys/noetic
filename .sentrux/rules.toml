@@ -50,6 +50,11 @@ name = "web"
 paths = ["packages/web/**"]
 order = 0
 
+[[layers]]
+name = "inspector"
+paths = ["packages/inspector/**"]
+order = 0
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tier B — CLI-internal layers (packages/cli/src/**)
 # See specs/22-cli-architecture.md.

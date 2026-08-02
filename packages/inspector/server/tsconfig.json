@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["bun-types"],
+    // Resolve @noetic-tools/* to sibling src/*.ts (the workspace's `bun`
+    // export condition) so a stale dist/ can never break the server.
+    "customConditions": ["bun"]
+  },
+  "include": ["./**/*.ts", "../agent/**/*.ts", "../test/**/*.ts"]
+}

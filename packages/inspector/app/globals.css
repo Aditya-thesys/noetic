@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/* Design tokens ported from the beautiful-ui showcase
+   (https://beautiful-ui-five.vercel.app/): raw palette on :root, dark values
+   under prefers-color-scheme, and a @theme inline mapping so Tailwind
+   utilities like bg-surface / text-ink-2 / rounded-card / shadow-card work. */
+
+:root {
+  --page: #fafafb;
+  --canvas: #f1f2f3;
+  --surface: #fff;
+  --inset: #f7f8f9;
+  --hover: #f4f5f6;
+  --hover-2: #e7e9eb;
+  --ink: #1f2124;
+  --ink-2: #62656b;
+  --ink-3: #9a9da3;
+  --line: #ecedef;
+  --line-strong: #e0e2e5;
+  --field: #f2f2f3;
+  --stripe: #49494913;
+  --stripe-bg: #f5f5f5;
+  --accent: #0285ff;
+  --accent-ink: #0170dd;
+  --accent-tint: #e9f3ff;
+  --green: #189a4d;
+  --green-tint: #e8f5ed;
+  --orange: #ef720c;
+  --orange-tint: #fdf1e5;
+  --red: #e3474c;
+  --red-tint: #fcecec;
+  --shadow-hairline: 0 0 0 1px var(--line);
+  --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px #1018280d;
+  --shadow-card: 0 0 0 1px var(--line), 0 1px 2px #1018280a, 0 2px 6px #10182808;
+  --shadow-raised: 0 0 0 1px var(--line), 0 2px 10px #0000000b;
+  --shadow-overlay: 0 0 0 1px var(--line), 0 8px 28px #0001;
+  --shadow-inset-field: inset 0 1px 2px #0000001f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #17181a;
+    --canvas: #1c1d1f;
+    --surface: #232427;
+    --inset: #1f2022;
+    --hover: #2a2b2e;
+    --hover-2: #313236;
+    --ink: #f2f3f4;
+    --ink-2: #a5a8ad;
+    --ink-3: #6c6f75;
+    --line: #2e3033;
+    --line-strong: #3a3c40;
+    --field: #2b2c2f;
+    --stripe: #ffffff0e;
+    --stripe-bg: #1b1c1e;
+    --accent: #3d9aff;
+    --accent-ink: #7ec0ff;
+    --accent-tint: #3d9aff29;
+    --green: #3dbb72;
+    --green-tint: #3dbb7224;
+    --orange: #f68f3c;
+    --orange-tint: #f68f3c24;
+    --red: #ee5c61;
+    --red-tint: #ee5c6124;
+    --shadow-hairline: 0 0 0 1px var(--line);
+    --shadow-btn: 0 0 0 1px var(--line-strong), 0 1px 2px #0000004d;
+    --shadow-card: 0 0 0 1px var(--line), 0 1px 2px #0003, 0 2px 6px #0003;
+    --shadow-raised: 0 0 0 1px var(--line), 0 2px 10px #00000038;
+    --shadow-overlay: 0 0 0 1px var(--line-strong), 0 8px 28px #00000057;
+    --shadow-inset-field: inset 0 1px 2px #0006;
+  }
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-inset: var(--inset);
+  --color-hover: var(--hover);
+  --color-hover-2: var(--hover-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-field: var(--field);
+  --color-stripe: var(--stripe);
+  --color-stripe-bg: var(--stripe-bg);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-tint: var(--accent-tint);
+  --color-green: var(--green);
+  --color-green-tint: var(--green-tint);
+  --color-orange: var(--orange);
+  --color-orange-tint: var(--orange-tint);
+  --color-red: var(--red);
+  --color-red-tint: var(--red-tint);
+  --radius-chip: 6px;
+  --radius-control: 8px;
+  --radius-card: 10px;
+  --shadow-hairline: var(--shadow-hairline);
+  --shadow-btn: var(--shadow-btn);
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-overlay: var(--shadow-overlay);
+  --shadow-inset-field: var(--shadow-inset-field);
+}
+
+/* Animations the vendored components reference. */
+@keyframes fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fade-in {
+  0% {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes shimmer-text {
+  0% {
+    background-position: 150%;
+  }
+  to {
+    background-position: -50%;
+  }
+}
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

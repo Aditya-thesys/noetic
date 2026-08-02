@@ -33,7 +33,8 @@
     "format": "bunx biome format --write .",
     "format:check": "bunx biome format .",
     "check:exports": "bun scripts/check-export-tags.ts",
-    "example:sub-harness": "bun examples/sub-harness-e2e.ts"
+    "example:sub-harness": "bun examples/sub-harness-e2e.ts",
+    "inspect": "bun packages/inspector/server/host.ts"
   },
   "dependencies": {
     "@openrouter/agent": "^0.6.0",
