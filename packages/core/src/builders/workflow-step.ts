@@ -87,7 +87,16 @@ export function stepWorkflow(opts: StepWorkflowOpts): StepRun<ContextMemory, str
     });
   }
 
-  let cached: Step<ContextMemory, string, string> | undefined;
+  // The hydrated tree bakes the harness's executeStep into every nested
+  // node's closure, so the cache is keyed on the harness: a step shared
+  // across sessions re-hydrates when it runs under a different harness
+  // instead of routing nested steps through the first one.
+  let cached:
+    | {
+        harness: unknown;
+        step: Step<ContextMemory, string, string>;
+      }
+    | undefined;
 
   return stepBuilders.step.run({
     id: opts.id,
@@ -101,10 +110,13 @@ export function stepWorkflow(opts: StepWorkflowOpts): StepRun<ContextMemory, str
         });
       }
       const executeStep: ExecuteStepFn = frameworkCast(harness.run.bind(harness));
-      if (!cached) {
-        cached = hydrate(opts, executeStep);
+      if (!cached || cached.harness !== harness) {
+        cached = {
+          harness,
+          step: hydrate(opts, executeStep),
+        };
       }
-      return stringify(await executeStep(cached, input, ctx));
+      return stringify(await executeStep(cached.step, input, ctx));
     },
   });
 }

@@ -549,7 +549,7 @@ Throws `NoeticConfigError` with code `UNKNOWN_NODE_KIND` if a node kind is unrec
 
 - **`run` nodes need a subprocess adapter** -- the JSON `run` node carries its body as a code string and dispatches it through a subprocess adapter (it is never `eval`'d in-process). A host that uses `run` nodes must supply an adapter capable of running the code and capturing its stdout.
 - **Tools resolved by name** -- every tool referenced in the workflow must be passed in the `tools` array. The hydrator looks them up by `tool.name`.
-- **Subflow refs resolve at execution time** -- a `subflow` node's `ref` is looked up on first execution, not during hydration, so an unregistered name surfaces as `UNKNOWN_WORKFLOW_REFERENCE` when the node runs. Depth limits do not see through refs; cycle detection bounds repetition instead.
+- **Subflow refs resolve at execution time** -- a `subflow` node's `ref` is looked up on first execution, not during hydration, so an unregistered name surfaces as `UNKNOWN_WORKFLOW_REFERENCE` when the node runs. Depth limits do not see through refs; cycle detection prevents infinite recursion, but acyclic ref fan-out is not bounded — hosts should cap registry size and breadth for untrusted documents.
 - **Branch routing is substring-based** -- branch routes use case-insensitive substring matching on the input string. Complex routing logic requires programmatic `branch()` steps.
 
 ## Plans as Workflows

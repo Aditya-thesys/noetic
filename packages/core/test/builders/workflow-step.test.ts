@@ -244,6 +244,41 @@ describe('step.workflow — execution', () => {
     }
   });
 
+  test('a different harness re-hydrates so nested steps run through it', async () => {
+    const doc: WorkflowDocument = {
+      version: 1,
+      root: {
+        kind: 'sequence',
+        id: 'seq',
+        steps: [
+          {
+            kind: 'llm',
+            id: 'leaf',
+            instructions: 'do it',
+          },
+        ],
+      },
+    };
+    const built = stepWorkflow({
+      id: 'wf-two-harnesses',
+      document: doc,
+    });
+    const a = makeRecordingContext();
+    const b = makeRecordingContext();
+    await built.execute('one', a.ctx);
+    await built.execute('two', b.ctx);
+    // The sequence wrapper drives its children via the executeStep captured at
+    // hydration; harness B must see its own leaf execution, not harness A.
+    expect(a.executed.map((e) => e.id)).toEqual([
+      'seq',
+      'leaf',
+    ]);
+    expect(b.executed.map((e) => e.id)).toEqual([
+      'seq',
+      'leaf',
+    ]);
+  });
+
   test('repeated executions reuse the memoized hydrated tree', async () => {
     const built = stepWorkflow({
       id: 'wf-memo',

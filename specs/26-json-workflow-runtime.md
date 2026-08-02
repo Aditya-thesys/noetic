@@ -480,7 +480,7 @@ function hydrateUntil(pred: UntilPredicate): Until {
 
 ### Depth Enforcement
 
-Depth is measured by `workflowDepth` (structural nodes add +1 over their deepest child; leaves are 0) and enforced at parse time: `parseAndRunWorkflow` and `dynamicWorkflow` reject documents deeper than their `maxDepth` option (default `5`) with `WORKFLOW_VALIDATION_FAILED`. Depth does not see through `subflow` refs — a named sub-workflow's own depth is checked wherever that document is itself parsed, and unbounded repetition through refs is bounded by cycle detection instead.
+Depth is measured by `workflowDepth` (structural nodes add +1 over their deepest child; leaves are 0) and enforced at parse time: `parseAndRunWorkflow` and `dynamicWorkflow` reject documents deeper than their `maxDepth` option (default `5`) with `WORKFLOW_VALIDATION_FAILED`. Depth does not see through `subflow` refs — a named sub-workflow's own depth is checked wherever that document is itself parsed. Cycle detection prevents infinite recursion through refs, but it does not bound total fan-out: an acyclic chain of workflows that each reference the next several times multiplies execution combinatorially. Hosts that accept untrusted registries should cap the registry size and per-document breadth accordingly.
 
 ---
 
@@ -573,7 +573,7 @@ Tool references are strings, not `Tool` objects. Resolution happens once during 
 
 ### Maximum Tree Depth
 
-Tree depth is enforced at parse time to prevent unbounded recursion in LLM-generated workflows. The default limit is `5` levels of structural nesting, configurable via the `maxDepth` option on `parseAndRunWorkflow` and `dynamicWorkflow`. Depth does not see through `subflow` refs; cycle detection bounds repetition through named references instead.
+Tree depth is enforced at parse time to prevent unbounded recursion in LLM-generated workflows. The default limit is `5` levels of structural nesting, configurable via the `maxDepth` option on `parseAndRunWorkflow` and `dynamicWorkflow`. Depth does not see through `subflow` refs; cycle detection prevents infinite recursion through them, but acyclic ref fan-out is not bounded by the runtime — hosts cap registry size and breadth.
 
 ---
 

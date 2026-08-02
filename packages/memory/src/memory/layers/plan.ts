@@ -145,10 +145,16 @@ function normalizeState(saved: PlanState): PlanState {
     saved.planTree !== null && WorkflowDocumentSchema.safeParse(saved.planTree).success
       ? saved.planTree
       : null;
+  const workflows: Record<string, WorkflowDocument> = {};
+  for (const [name, doc] of Object.entries(saved.workflows ?? {})) {
+    if (WorkflowDocumentSchema.safeParse(doc).success) {
+      workflows[name] = doc;
+    }
+  }
   return {
     ...saved,
     planTree: tree,
-    workflows: saved.workflows ?? {},
+    workflows,
   };
 }
 

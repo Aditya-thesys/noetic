@@ -183,6 +183,40 @@ describe('planMemory layer', () => {
       expect(result.state.workflows).toEqual({});
       expect(result.state.version).toBe(2);
     });
+
+    it('drops malformed persisted workflows and keeps valid ones', async () => {
+      const storage = makeScopedStorage();
+      const good = makeDoc();
+      await storage.set('state', {
+        ...makePlanningState(),
+        workflows: {
+          good,
+          broken: {
+            nope: true,
+          },
+        },
+      });
+
+      const layer = planMemory();
+      const result = await layer.hooks.init!({
+        storage,
+        scopeKey: 'thread-1',
+        ctx: makeCtx(),
+      });
+      expect(result.state.workflows).toEqual({
+        good,
+      });
+
+      // Recall must survive: a malformed entry previously crashed walkWorkflow.
+      const recall = await layer.hooks.recall!({
+        log: makeItemLog(),
+        query: '',
+        ctx: makeCtx(),
+        state: result.state,
+        budget: 3e3,
+      });
+      expect(recall).not.toBeNull();
+    });
   });
 
   //#endregion
@@ -1040,6 +1074,22 @@ describe('planMemory layer', () => {
         makeCtx(),
       );
       expect(overCap.result).toContain('over the');
+
+      // One char under the cap (N-1) → ok.
+      const roomy = planMemory({
+        maxWorkflowChars: baseLength + 1,
+      });
+      const roomyFn = roomy.provides!.setWorkflow;
+      assert(roomyFn.kind === 'function');
+      const underCap = await roomyFn.execute(
+        {
+          name: 'under-cap',
+          document: base,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(underCap.result).toContain('created');
     });
 
     it('rejects workflows deeper than maxDepth', async () => {
