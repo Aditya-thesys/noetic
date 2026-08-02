@@ -35,13 +35,15 @@ export { provide } from './builders/provide-builder';
 /** @public */
 export { spawn } from './builders/spawn-builder';
 /** @public */
-export { step } from './builders/step-builders';
-/** @public */
 export { tool, toolWithGenerator } from './builders/tool-builder';
 /** @public */
 export type { HydrationContext } from './builders/workflow-hydrator';
 /** @public */
 export { hydrateNode, hydrateWorkflow } from './builders/workflow-hydrator';
+/** @public */
+export type { StepWorkflowOpts } from './builders/workflow-step';
+/** @public */
+export { step } from './builders/workflow-step';
 
 //#endregion
 

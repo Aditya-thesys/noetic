@@ -171,6 +171,8 @@ export interface ParseAndRunWorkflowOpts {
    * host that runs layer-bearing workflows must pass its layers here.
    */
   layers?: ReadonlyMap<string, MemoryLayer>;
+  /** Named sub-workflows the document's `subflow` nodes may reference via `ref`. */
+  workflows?: ReadonlyMap<string, WorkflowDocument>;
 }
 
 /**
@@ -202,6 +204,7 @@ export async function parseAndRunWorkflow(opts: ParseAndRunWorkflowOpts): Promis
     tools: buildToolMap(opts.tools),
     executeStep,
     layers: opts.layers,
+    workflows: opts.workflows,
   };
 
   const hydrated = hydrateWorkflow(parseResult.doc, hydrationCtx);

@@ -272,6 +272,35 @@ const withMemory = step.provide({
 
 ---
 
+## Builder: `step.workflow` — JSON Workflow as a Step
+
+Runs a `WorkflowDocument` (spec 26) as a single composable step. Not a new `Step` kind — the builder returns a `StepRun` whose `execute` hydrates the document via the harness on the execution context and runs it.
+
+```typescript
+step.workflow(opts: {
+  id: string;
+  document?: WorkflowDocument;   // inline — XOR with ref
+  ref?: string;                  // named, resolved from workflows
+  tools?: Tool[];
+  layers?: ReadonlyMap<string, MemoryLayer>;
+  workflows?: ReadonlyMap<string, WorkflowDocument>;
+  subHarnesses?: ReadonlyMap<SubHarnessKind, SubHarness>;
+  uiLibraries?: ReadonlyMap<string, OutputCodec>;
+  resolveSubprocess?: (ref: string) => SubprocessAdapter | undefined;
+  isolation?: 'inherit' | 'spawn';
+}): StepRun<ContextMemory, string, string>
+```
+
+Semantics:
+
+- **Lazy resolution, memoized.** The document resolves on first execution (a `ref` may target a workflow registered after the step is built); the hydrated tree is reused across executions.
+- **Isolation.** `'inherit'` (default) runs the hydrated tree in the caller's session; `'spawn'` wraps it in `spawn({ id: `${id}-spawn` })` for a fresh context boundary.
+- **Cycle safety.** When built from a `ref`, that name seeds the subflow ancestry chain, so a self-referencing named workflow fails with `WORKFLOW_CYCLE` instead of recursing.
+- **Errors.** `EMPTY_STEP_ID`; `INVALID_WORKFLOW_SOURCE` unless exactly one of `document`/`ref` is set; at execution time `MISSING_HARNESS_CONTEXT` without `ctx.harness` and `UNKNOWN_WORKFLOW_REFERENCE` for an unregistered `ref`.
+- **Portability.** `step.workflow` lives on the main entry's `step` namespace only; the `/portable` surface exports the base namespace without it, keeping the hydrator out of restricted runtimes.
+
+---
+
 ## Why Four Execution Variants?
 
 The agent harness needs to treat them differently:
