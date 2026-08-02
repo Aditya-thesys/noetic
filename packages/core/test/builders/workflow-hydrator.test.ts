@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import assert from 'node:assert';
-import type { MemoryLayer } from '@noetic-tools/memory';
+import type { ContextLayer } from '@noetic-tools/context';
 import type {
   OutputCodec,
   ProcessSubprocessRequest,
@@ -392,11 +392,11 @@ describe('hydrateNode — spawn', () => {
     };
     const result = hydrateNode(node, makeHydrationContext());
     assert(result.kind === 'spawn');
-    expect(result.memory).toBeUndefined();
+    expect(result.context).toBeUndefined();
   });
 
   test('resolves named layers onto the spawned child', () => {
-    const mockLayer: MemoryLayer = frameworkCast({
+    const mockLayer: ContextLayer = frameworkCast({
       id: 'durable-task-state',
       slot: 110,
     });
@@ -421,7 +421,7 @@ describe('hydrateNode — spawn', () => {
     ]);
     const result = hydrateNode(node, ctx);
     assert(result.kind === 'spawn');
-    expect(result.memory).toEqual([
+    expect(result.context).toEqual([
       mockLayer,
     ]);
   });
@@ -930,7 +930,7 @@ describe('hydrateWorkflow', () => {
 
 describe('hydrateNode — provide', () => {
   test('produces StepProvide with resolved layers', () => {
-    const mockLayer: MemoryLayer = frameworkCast({
+    const mockLayer: ContextLayer = frameworkCast({
       id: 'test-layer',
       slot: 0,
     });

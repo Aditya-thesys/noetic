@@ -257,7 +257,7 @@ describe('WorkflowNodeSchema — provide', () => {
         instructions: 'work',
       },
       layers: [
-        'working-memory',
+        'working-context',
       ],
     };
     const result = WorkflowNodeSchema.safeParse(node);

@@ -6,7 +6,7 @@
  * ones — they register in the step registry, carry retry policies, etc.
  */
 
-import type { ContextMemory, MemoryLayer } from '@noetic-tools/memory';
+import type { ContextData, ContextLayer } from '@noetic-tools/context';
 import type {
   Context,
   ExecuteStepFn,
@@ -48,7 +48,7 @@ import { step } from './step-builders';
 export interface HydrationContext {
   tools: ReadonlyMap<string, Tool>;
   executeStep: ExecuteStepFn;
-  layers?: ReadonlyMap<string, MemoryLayer>;
+  layers?: ReadonlyMap<string, ContextLayer>;
   /** SubHarness adapters keyed by harness id, resolving `claude-code`/`codex`/… nodes. */
   subHarnesses?: ReadonlyMap<SubHarnessKind, SubHarness>;
   /**
@@ -86,12 +86,12 @@ interface SubHarnessBuilderOpts {
   session?: SubHarnessSessionPolicy;
 }
 
-type SubHarnessStepBuilder = (opts: SubHarnessBuilderOpts) => Step<ContextMemory, string, string>;
+type SubHarnessStepBuilder = (opts: SubHarnessBuilderOpts) => Step<ContextData, string, string>;
 
 type NodeHydrator = (
   node: WorkflowNode,
   ctx: HydrationContext,
-) => Step<ContextMemory, string, string>;
+) => Step<ContextData, string, string>;
 
 //#endregion
 
@@ -163,7 +163,7 @@ function resolveLlmTools(
 function hydrateLlmNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'llm') {
     return frameworkCast(undefined);
   }
@@ -219,7 +219,7 @@ function resolveOutputCodec(
 function hydrateToolNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'tool') {
     return frameworkCast(undefined);
   }
@@ -257,7 +257,7 @@ function hydrateToolNode(
           harness: execCtx.harness,
           fs: execCtx.fs,
           shell: execCtx.shell,
-          memory: {
+          context: {
             get: <T>(_layerId: string): T | undefined => undefined,
             set: <T>(_layerId: string, _state: T): void => {},
           },
@@ -274,7 +274,7 @@ function hydrateToolNode(
 function hydrateRunNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'run') {
     return frameworkCast(undefined);
   }
@@ -305,7 +305,7 @@ function hydrateRunNode(
 function hydrateBranchNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'branch') {
     return frameworkCast(undefined);
   }
@@ -339,7 +339,7 @@ function hydrateBranchNode(
 function hydrateForkNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'fork') {
     return frameworkCast(undefined);
   }
@@ -351,7 +351,7 @@ function hydrateForkNode(
   const eachTemplate = node.each;
   const staticPaths = dynamic ? [] : (node.paths ?? []).map((p) => hydrateNode(p, ctx));
 
-  const pathsFactory = (input: string): Step<ContextMemory, string, string>[] => {
+  const pathsFactory = (input: string): Step<ContextData, string, string>[] => {
     if (!dynamic || !eachTemplate) {
       return staticPaths;
     }
@@ -366,7 +366,7 @@ function hydrateForkNode(
       }),
     );
   };
-  const optimizable = dynamic ? undefined : frameworkCast<Step<ContextMemory>[]>(staticPaths);
+  const optimizable = dynamic ? undefined : frameworkCast<Step<ContextData>[]>(staticPaths);
 
   if (node.mode === 'race') {
     return fork({
@@ -419,7 +419,7 @@ function resolveNamedLayers({
   nodeKind: string;
   nodeId: string;
   ctx: HydrationContext;
-}): MemoryLayer[] {
+}): ContextLayer[] {
   if (!ctx.layers) {
     return [];
   }
@@ -428,7 +428,7 @@ function resolveNamedLayers({
     if (!layer) {
       throw new NoeticConfigError({
         code: 'UNKNOWN_LAYER_REFERENCE',
-        message: `Memory layer '${name}' referenced in ${nodeKind} node '${nodeId}' is not registered.`,
+        message: `Context layer '${name}' referenced in ${nodeKind} node '${nodeId}' is not registered.`,
         hint: `Available layers: ${
           [
             ...(ctx.layers?.keys() ?? []),
@@ -443,11 +443,11 @@ function resolveNamedLayers({
 function hydrateSpawnNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'spawn') {
     return frameworkCast(undefined);
   }
-  // `memory` is left undefined when the node names no layers so the child
+  // `context` is left undefined when the node names no layers so the child
   // inherits the parent's layers (spec 04). An explicit list replaces them.
   const resolvedLayers = node.layers
     ? resolveNamedLayers({
@@ -461,21 +461,21 @@ function hydrateSpawnNode(
     id: node.id,
     child: hydrateNode(node.child, ctx),
     timeout: node.timeout,
-    memory: resolvedLayers,
+    context: resolvedLayers,
   });
 }
 
 function hydrateProvideNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'provide') {
     return frameworkCast(undefined);
   }
   return provide({
     id: node.id,
     child: hydrateNode(node.child, ctx),
-    memory: resolveNamedLayers({
+    context: resolveNamedLayers({
       names: node.layers,
       nodeKind: 'provide',
       nodeId: node.id,
@@ -487,7 +487,7 @@ function hydrateProvideNode(
 function hydrateLoopNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'loop') {
     return frameworkCast(undefined);
   }
@@ -504,7 +504,7 @@ function hydrateLoopNode(
 function hydrateSequenceNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'sequence') {
     return frameworkCast(undefined);
   }
@@ -529,7 +529,7 @@ function hydrateSequenceNode(
 function hydrateEveryNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'every') {
     return frameworkCast(undefined);
   }
@@ -551,7 +551,7 @@ const SUB_HARNESS_BUILDERS: Record<SubHarnessKind, SubHarnessStepBuilder> = {
 function hydrateSubHarnessNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (
     node.kind !== 'claude-code' &&
     node.kind !== 'codex' &&
@@ -780,7 +780,7 @@ function buildPerItemStep(opts: {
   item: unknown;
   index: number;
   ctx: HydrationContext;
-}): Step<ContextMemory, string, string> {
+}): Step<ContextData, string, string> {
   const { forkId, eachTemplate, item, index, ctx } = opts;
   const hydratedEach = hydrateNode(suffixNodeIds(eachTemplate, `-${index}`), ctx);
   return frameworkCast(
@@ -924,7 +924,7 @@ async function runCodeViaSubprocess(opts: {
 export function hydrateNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   const hydrator = NODE_HYDRATORS[node.kind];
   if (!hydrator) {
     throw new NoeticConfigError({
@@ -947,7 +947,7 @@ export function hydrateNode(
 export function hydrateWorkflow(
   doc: WorkflowDocument,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   return hydrateNode(doc.root, ctx);
 }
 
