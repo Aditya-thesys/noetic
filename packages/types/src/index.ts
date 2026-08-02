@@ -5,6 +5,7 @@
 export * from './errors/noetic-config-error';
 export * from './errors/noetic-error';
 export * from './schemas/item';
+export * from './schemas/workflow';
 export * from './types/channel';
 export * from './types/common';
 export * from './types/context';
