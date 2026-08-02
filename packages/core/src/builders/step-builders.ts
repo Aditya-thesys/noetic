@@ -23,7 +23,7 @@ import { getDefaultRegistrar } from '../types/step-registrar';
 
 //#region Types
 
-interface StepRunOpts<TContext, I, O> {
+export interface StepRunOpts<TContext, I, O> {
   id: string;
   execute: (input: I, ctx: Context<TContext>) => Promise<O>;
   retry?: RetryPolicy;
@@ -35,7 +35,7 @@ interface StepRunOpts<TContext, I, O> {
   subprocess?: SubprocessAdapter;
 }
 
-interface StepLLMOpts<TContext, O> {
+export interface StepLLMOpts<TContext, O> {
   id: string;
   /** Model id. Eager string or `(ctx) => string` getter (resolved at step execution). */
   model: Lazy<string, TContext>;
@@ -53,13 +53,13 @@ interface StepLLMOpts<TContext, O> {
   emit?: boolean | ((eventType: string, data: Record<string, unknown>) => boolean);
 }
 
-interface StepToolOpts<I, O> {
+export interface StepToolOpts<I, O> {
   id: string;
   tool: Tool<ZodType<I>, ZodType<O>>;
   args?: Partial<I>;
 }
 
-interface StepSubHarnessOpts<TContext, O> {
+export interface StepSubHarnessOpts<TContext, O> {
   id: string;
   /** The harness adapter created by a `@noetic-tools/sub-harness-*` factory. Eager or `(ctx) => SubHarness`. */
   harness: Lazy<SubHarness, TContext>;
