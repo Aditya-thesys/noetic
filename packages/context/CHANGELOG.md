@@ -1,3 +1,9 @@
+## @noetic-tools/context-v1.0.0 (2026-08-02)
+
+* chore(context): start the version line at 1.0.0 ([636a245](https://github.com/mattapperson/noetic/commit/636a245))
+* fix: apply the rename to work that landed on main during the rebase ([aee8f21](https://github.com/mattapperson/noetic/commit/aee8f21))
+* feat: rename the memory layer system to context layers ([123810f](https://github.com/mattapperson/noetic/commit/123810f))
+
 # @noetic-tools/context
 
 This package starts its version line at `1.0.0`. It is the continuation of
