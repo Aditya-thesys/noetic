@@ -20,6 +20,8 @@ import type {
   SubHarnessSettings,
   SubprocessAdapter,
   Tool,
+  ToolContext,
+  ToolExecutionContext,
   Until,
 } from '@noetic-tools/types';
 import { frameworkCast, isServerToolSpec, NoeticConfigError } from '@noetic-tools/types';
@@ -252,15 +254,22 @@ function hydrateToolNode(
           arguments: JSON.stringify(args),
         };
         execCtx.itemLog.append(callItem);
-        const toolCtx = {
+        const layerState: ToolContext = {
+          get: <T>(_layerId: string): T | undefined => undefined,
+          set: <T>(_layerId: string, _state: T): void => {},
+        };
+        const toolCtx: ToolExecutionContext = {
           ctx: execCtx,
           harness: execCtx.harness,
           fs: execCtx.fs,
           shell: execCtx.shell,
-          context: {
-            get: <T>(_layerId: string): T | undefined => undefined,
-            set: <T>(_layerId: string, _state: T): void => {},
-          },
+          context: layerState,
+          // Deprecated alias — the same accessor object, as
+          // `buildToolExecutionContext` does. `Tool.execute` takes its second
+          // argument as `unknown`, so nothing here is structurally checked
+          // against `ToolExecutionContext`; the annotation above is what makes
+          // a missing field a compile error instead of a runtime `undefined`.
+          memory: layerState,
           assembledView: execCtx.itemLog.items,
           lastStepMeta: execCtx.lastStepMeta,
         };

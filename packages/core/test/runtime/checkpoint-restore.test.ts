@@ -240,18 +240,34 @@ describe('AgentHarness.restore context wiring', () => {
       slot: 100,
     });
 
-    for (const key of [
-      'context',
-      'memory',
-    ] as const) {
+    // Written as two explicit literals rather than a loop over a key union:
+    // a computed key widens to an index signature, so a typo would still
+    // compile and the check would silently become runtime-only.
+    {
       const { origin, resumed } = makeHarnessPair([
         harnessLayer,
       ]);
       const ctx = origin.createContext({});
       await origin.checkpoint(ctx);
-
       const restored = await resumed.restore(ctx.id, {
-        [key]: [
+        context: [
+          overrideLayer,
+        ],
+      });
+      assert(restored);
+      expect(restored.layers).toEqual([
+        overrideLayer,
+      ]);
+    }
+
+    {
+      const { origin, resumed } = makeHarnessPair([
+        harnessLayer,
+      ]);
+      const ctx = origin.createContext({});
+      await origin.checkpoint(ctx);
+      const restored = await resumed.restore(ctx.id, {
+        memory: [
           overrideLayer,
         ],
       });

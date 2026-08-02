@@ -173,6 +173,21 @@ describe('deprecated `ctx.memory` accessor', () => {
     expect(mockToolCtx.memory).toBe(mockToolCtx.context);
   });
 
+  it('keeps the two in sync when a caller overrides only `context`', () => {
+    // `makeMockContext` spreads overrides last, so a bare `context` override
+    // would otherwise orphan `memory` on the original object.
+    const replacement = {
+      todo: {
+        items: [],
+      },
+    };
+    const ctx = makeMockContext({
+      context: replacement,
+    });
+    expect(ctx.context).toBe(replacement);
+    expect(ctx.memory).toBe(replacement);
+  });
+
   it('is non-optional, so pre-rename indexing still compiles', () => {
     const harness = new AgentHarness({
       name: 'indexing-harness',

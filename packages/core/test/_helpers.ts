@@ -301,8 +301,6 @@ export function makeMockContext(overrides?: Partial<Context>): Context {
       cwd: process.cwd(),
     },
     layers: undefined,
-    context: contextData,
-    memory: contextData,
     recv: async () => {
       throw new Error('not impl');
     },
@@ -319,6 +317,11 @@ export function makeMockContext(overrides?: Partial<Context>): Context {
     aborted: false,
     abort: () => {},
     ...overrides,
+    // Re-derived AFTER the spread: an override that sets only `context` would
+    // otherwise leave `memory` pointing at the orphaned original, a divergence
+    // ContextImpl cannot produce (its `memory` is a getter over `context`).
+    context: overrides?.context ?? contextData,
+    memory: overrides?.memory ?? overrides?.context ?? contextData,
   };
 }
 

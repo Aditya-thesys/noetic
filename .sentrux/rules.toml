@@ -232,6 +232,11 @@ to = "packages/core/src/**"
 reason = "@noetic-tools/memory is the frozen deprecation shim for @noetic-tools/context; it re-exports that package and nothing else, so it inherits the same no-import-back-into-core rule"
 
 [[boundaries]]
+from = "packages/context/src/**"
+to = "packages/memory/src/**"
+reason = "the deprecation shim depends on @noetic-tools/context, so the reverse edge would be a package cycle. They are same-order siblings, which sentrux leaves unconstrained unless stated explicitly"
+
+[[boundaries]]
 from = "packages/types/src/**"
 to = "packages/context/src/**"
 reason = "@noetic-tools/types is the dependency-free foundation; @noetic-tools/context builds on it, not the reverse"

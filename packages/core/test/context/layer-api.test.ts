@@ -338,15 +338,18 @@ describe('resolveLayerTools', () => {
     const incrementTool = tools.find((t) => t.name === 'counter/increment');
     expect(incrementTool).toBeDefined();
 
+    const layerState = {
+      get: () => undefined,
+      set: () => {},
+    };
     const toolCtx = {
       ctx,
       harness,
       fs: harness.fs,
       shell: harness.shell,
-      context: {
-        get: () => undefined,
-        set: () => {},
-      },
+      context: layerState,
+      // Deprecated alias — same accessor object, as the runtime builds it.
+      memory: layerState,
       assembledView: [],
       lastStepMeta: null,
     };
