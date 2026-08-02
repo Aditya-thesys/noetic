@@ -190,17 +190,6 @@ export type { DynamicWorkflowOpts, ParseAndRunWorkflowOpts } from './patterns/dy
 /** @public */
 export { dynamicWorkflow, parseAndRunWorkflow } from './patterns/dynamic-workflow';
 /** @public */
-export type {
-  FlowNode,
-  ForkFlowNode,
-  LlmFlowNode,
-  SequenceFlowNode,
-  SpawnFlowNode,
-  SubagentFlowNode,
-} from './patterns/flow';
-/** @public */
-export { FlowSchema, flowDepth, validateFlow, walkFlow } from './patterns/flow';
-/** @public */
 export type { InterviewOpts, InterviewQuestionAnswer, InterviewResult } from './patterns/interview';
 /** @public */
 export { interview } from './patterns/interview';

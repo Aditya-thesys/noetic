@@ -2,13 +2,19 @@ import { describe, expect, it } from 'bun:test';
 import assert from 'node:assert';
 import type { PlanExecutionEntry, PlanState } from '@noetic-tools/memory';
 import { PlanPhase, planMemory } from '@noetic-tools/memory';
+import type {
+  LlmWorkflowNode,
+  SequenceWorkflowNode,
+  SubflowWorkflowNode,
+  WorkflowDocument,
+  WorkflowNode,
+} from '@noetic-tools/types';
 import { frameworkCast, SteeringAction } from '@noetic-tools/types';
-import type { FlowNode, LlmFlowNode, SequenceFlowNode } from '../../src/patterns/flow';
 import { makeCtx, makeItemLog, makeScopedStorage } from '../_helpers';
 
 //#region Test Fixtures
 
-function makeLlmNode(overrides?: Partial<LlmFlowNode>): LlmFlowNode {
+function makeLlmNode(overrides?: Partial<LlmWorkflowNode>): LlmWorkflowNode {
   return {
     kind: 'llm',
     id: 'leaf',
@@ -17,17 +23,28 @@ function makeLlmNode(overrides?: Partial<LlmFlowNode>): LlmFlowNode {
   };
 }
 
-/** Depth-0 leaf FlowNode (llm kind), used as the default planTree in fixtures. */
-function makeFlowNode(overrides?: Partial<LlmFlowNode>): FlowNode {
-  return makeLlmNode(overrides);
+/** Wraps a root node in the document envelope. Defaults to a depth-0 llm leaf. */
+function makeDoc(root: WorkflowNode = makeLlmNode()): WorkflowDocument {
+  return {
+    version: 1,
+    root,
+  };
 }
 
 /** Wraps nodes in a sequence to add one level of depth. */
-function makeSequence(steps: FlowNode[], id = 'seq'): SequenceFlowNode {
+function makeSequence(steps: WorkflowNode[], id = 'seq'): SequenceWorkflowNode {
   return {
     kind: 'sequence',
     id,
     steps,
+  };
+}
+
+function makeSubflow(ref: string, id = `sub-${ref}`): SubflowWorkflowNode {
+  return {
+    kind: 'subflow',
+    id,
+    ref,
   };
 }
 
@@ -36,7 +53,7 @@ function makePlanningState(overrides?: Partial<PlanState>): PlanState {
     phase: PlanPhase.Planning,
     prd: null,
     planTree: null,
-
+    workflows: {},
     executionLog: [],
     version: 1,
     ...overrides,
@@ -48,7 +65,7 @@ function makeIdleState(overrides?: Partial<PlanState>): PlanState {
     phase: PlanPhase.Idle,
     prd: null,
     planTree: null,
-
+    workflows: {},
     executionLog: [],
     version: 0,
     ...overrides,
@@ -59,8 +76,8 @@ function makeExecutingState(overrides?: Partial<PlanState>): PlanState {
   return {
     phase: PlanPhase.Executing,
     prd: '# My Plan',
-    planTree: makeFlowNode(),
-
+    planTree: makeDoc(),
+    workflows: {},
     executionLog: [],
     version: 1,
     ...overrides,
@@ -76,6 +93,7 @@ interface PlanStatusView {
   phase: PlanPhase;
   hasPrd: boolean;
   hasPlanTree: boolean;
+  workflowNames: string[];
   version: number;
 }
 
@@ -113,6 +131,7 @@ describe('planMemory layer', () => {
       expect(result.state.phase).toBe(PlanPhase.Idle);
       expect(result.state.prd).toBeNull();
       expect(result.state.planTree).toBeNull();
+      expect(result.state.workflows).toEqual({});
       expect(result.state.version).toBe(0);
     });
 
@@ -120,6 +139,7 @@ describe('planMemory layer', () => {
       const storage = makeScopedStorage();
       const saved = makePlanningState({
         prd: '# Saved PRD',
+        planTree: makeDoc(),
       });
       await storage.set('state', saved);
 
@@ -131,6 +151,37 @@ describe('planMemory layer', () => {
       });
       expect(result.state.phase).toBe(PlanPhase.Planning);
       expect(result.state.prd).toBe('# Saved PRD');
+      expect(result.state.planTree).toEqual(makeDoc());
+    });
+
+    it('resets a legacy (non-WorkflowDocument) plan tree to null and backfills workflows', async () => {
+      const storage = makeScopedStorage();
+      // Legacy FlowNode shape: a bare node with no document envelope, and no
+      // workflows map — the pre-WorkflowDocument state format.
+      const legacy = {
+        phase: PlanPhase.Planning,
+        prd: '# Old PRD',
+        planTree: {
+          kind: 'llm',
+          id: 'leaf',
+          instructions: 'old shape',
+        },
+        executionLog: [],
+        version: 2,
+      };
+      await storage.set('state', legacy);
+
+      const layer = planMemory();
+      const result = await layer.hooks.init!({
+        storage,
+        scopeKey: 'thread-1',
+        ctx: makeCtx(),
+      });
+      expect(result.state.phase).toBe(PlanPhase.Planning);
+      expect(result.state.prd).toBe('# Old PRD');
+      expect(result.state.planTree).toBeNull();
+      expect(result.state.workflows).toEqual({});
+      expect(result.state.version).toBe(2);
     });
   });
 
@@ -151,7 +202,7 @@ describe('planMemory layer', () => {
       expect(result).toBeNull();
     });
 
-    it('returns plan_mode block in planning phase', async () => {
+    it('returns plan_mode block with workflow vocabulary in planning phase', async () => {
       const layer = planMemory();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
@@ -173,15 +224,57 @@ describe('planMemory layer', () => {
       expect(part.text).toContain('<plan_mode>');
       expect(part.text).toContain('PLAN MODE');
       expect(part.text).toContain('# Draft');
+      expect(part.text).toContain('noetic-workflow.schema.json');
+      expect(part.text).toContain('subflow');
+      expect(part.text).toContain('plan/setWorkflow');
     });
 
-    it('returns active_plan block in executing phase', async () => {
+    it('lists named workflows as summaries, not bodies, in planning recall', async () => {
       const layer = planMemory();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
         query: '',
         ctx: makeCtx(),
-        state: makeExecutingState(),
+        state: makePlanningState({
+          workflows: {
+            verify: makeDoc(
+              makeSequence([
+                makeLlmNode({
+                  id: 'a',
+                }),
+                makeLlmNode({
+                  id: 'b',
+                  instructions: 'MARKER_INSTRUCTIONS_BODY',
+                }),
+              ]),
+            ),
+          },
+        }),
+        budget: 3e3,
+      });
+      assert(result !== null);
+      assert(typeof result !== 'string');
+      const part = result.items[0];
+      assert(part.type === 'message');
+      const text = part.content[0];
+      assert(text.type === 'input_text');
+      expect(text.text).toContain('## Named Workflows');
+      expect(text.text).toContain('- verify: 3 nodes');
+      expect(text.text).toContain('plan/getWorkflow');
+      expect(text.text).not.toContain('MARKER_INSTRUCTIONS_BODY');
+    });
+
+    it('returns active_plan block with workflow names in executing phase', async () => {
+      const layer = planMemory();
+      const result = await layer.hooks.recall!({
+        log: makeItemLog(),
+        query: '',
+        ctx: makeCtx(),
+        state: makeExecutingState({
+          workflows: {
+            verify: makeDoc(),
+          },
+        }),
         budget: 3e3,
       });
       assert(result !== null);
@@ -192,6 +285,7 @@ describe('planMemory layer', () => {
       assert(text.type === 'input_text');
       expect(text.text).toContain('<active_plan>');
       expect(text.text).toContain('# My Plan');
+      expect(text.text).toContain('- verify: 1 node');
     });
 
     it('returns plan_outcome in completed phase', async () => {
@@ -203,7 +297,8 @@ describe('planMemory layer', () => {
         state: {
           phase: PlanPhase.Completed,
           prd: '# Done',
-          planTree: makeFlowNode(),
+          planTree: makeDoc(),
+          workflows: {},
           executionLog: [
             {
               timestamp: Date.now(),
@@ -234,7 +329,8 @@ describe('planMemory layer', () => {
         state: {
           phase: PlanPhase.Failed,
           prd: '# Failed',
-          planTree: makeFlowNode(),
+          planTree: makeDoc(),
+          workflows: {},
           executionLog: [
             {
               timestamp: Date.now(),
@@ -302,6 +398,9 @@ describe('planMemory layer', () => {
         'plan/enterPlanMode',
         'plan/updatePrd',
         'plan/setPlanTree',
+        'plan/setWorkflow',
+        'plan/removeWorkflow',
+        'plan/getWorkflow',
         'plan/exitPlanMode',
       ];
 
@@ -413,6 +512,23 @@ describe('planMemory layer', () => {
       expect(state.prd).toBe('# Goal\n\nMigrate to v2\n');
     });
 
+    it('resets workflows from a previous plan', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.enterPlanMode;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {},
+        makeIdleState({
+          workflows: {
+            stale: makeDoc(),
+          },
+        }),
+        makeCtx(),
+      );
+      const state = planState(result.state);
+      expect(state.workflows).toEqual({});
+    });
+
     it('leaves PRD null when no goal', async () => {
       const layer = planMemory();
       const fn = layer.provides!.enterPlanMode;
@@ -504,20 +620,72 @@ describe('planMemory layer', () => {
   });
 
   describe('setPlanTree', () => {
-    it('sets plan tree in planning phase', async () => {
+    it('sets a workflow document in planning phase', async () => {
       const layer = planMemory();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
-      const node = makeFlowNode();
+      const doc = makeDoc();
       const result = await fn.execute(
         {
-          tree: node,
+          document: doc,
         },
         makePlanningState(),
         makeCtx(),
       );
       const state = planState(result.state);
-      expect(state.planTree).toEqual(node);
+      expect(state.planTree).toEqual(doc);
+      expect(result.result).toContain('successfully');
+    });
+
+    it('accepts a JSON-stringified document', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setPlanTree;
+      assert(fn.kind === 'function');
+      const doc = makeDoc();
+      const result = await fn.execute(
+        {
+          document: JSON.stringify(doc),
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      const state = planState(result.state);
+      expect(state.planTree).toEqual(doc);
+    });
+
+    it('rejects a document that fails schema validation', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setPlanTree;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          document: {
+            version: 1,
+            root: {
+              kind: 'llm',
+              id: 'no-instructions',
+            },
+          },
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('Cannot set plan tree');
+      expect(planState(result.state).planTree).toBeNull();
+    });
+
+    it('rejects a value that is not valid JSON', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setPlanTree;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          document: '{not json',
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('not valid JSON');
     });
 
     it('rejects if not in planning phase', async () => {
@@ -526,7 +694,7 @@ describe('planMemory layer', () => {
       assert(fn.kind === 'function');
       const result = await fn.execute(
         {
-          tree: makeFlowNode(),
+          document: makeDoc(),
         },
         makeExecutingState(),
         makeCtx(),
@@ -536,7 +704,7 @@ describe('planMemory layer', () => {
 
     it('rejects if tree exceeds max depth', async () => {
       const layer = planMemory({
-        maxTreeDepth: 1,
+        maxDepth: 1,
       });
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
@@ -556,7 +724,7 @@ describe('planMemory layer', () => {
       );
       const result = await fn.execute(
         {
-          tree: deepTree,
+          document: makeDoc(deepTree),
         },
         makePlanningState(),
         makeCtx(),
@@ -566,7 +734,7 @@ describe('planMemory layer', () => {
 
     it('accepts tree at max depth boundary', async () => {
       const layer = planMemory({
-        maxTreeDepth: 1,
+        maxDepth: 1,
       });
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
@@ -581,7 +749,7 @@ describe('planMemory layer', () => {
       );
       const result = await fn.execute(
         {
-          tree: shallowTree,
+          document: makeDoc(shallowTree),
         },
         makePlanningState(),
         makeCtx(),
@@ -591,20 +759,435 @@ describe('planMemory layer', () => {
 
     it('accepts tree below max depth boundary (N-1)', async () => {
       const layer = planMemory({
-        maxTreeDepth: 1,
+        maxDepth: 1,
       });
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
-      // Bare leaf → depth 0, below boundary.
-      const leafTree = makeFlowNode();
       const result = await fn.execute(
         {
-          tree: leafTree,
+          document: makeDoc(),
         },
         makePlanningState(),
         makeCtx(),
       );
       expect(result.result).toContain('successfully');
+    });
+
+    it('rejects node kinds outside allowedNodeKinds', async () => {
+      const layer = planMemory({
+        allowedNodeKinds: [
+          'sequence',
+          'llm',
+          'subflow',
+        ],
+      });
+      const fn = layer.provides!.setPlanTree;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          document: makeDoc(
+            makeSequence([
+              {
+                kind: 'tool',
+                id: 'forbidden',
+                toolName: 'search',
+              },
+            ]),
+          ),
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('disallowed node kinds: tool');
+    });
+
+    it('rejects subflow refs that are not valid workflow names', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setPlanTree;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          document: makeDoc(makeSubflow('Bad Name', 'sub-bad')),
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('not valid workflow names');
+    });
+
+    it('lists not-yet-defined subflow refs in the success message', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setPlanTree;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          document: makeDoc(
+            makeSequence([
+              makeSubflow('gather-context'),
+              makeSubflow('run-tests'),
+            ]),
+          ),
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('not yet defined');
+      expect(result.result).toContain('gather-context');
+      expect(result.result).toContain('run-tests');
+      const state = planState(result.state);
+      expect(state.planTree).not.toBeNull();
+    });
+
+    it('reports plain success when every ref is defined', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setPlanTree;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          document: makeDoc(makeSubflow('verify')),
+        },
+        makePlanningState({
+          workflows: {
+            verify: makeDoc(),
+          },
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toBe(
+        'Plan tree set successfully. Call plan/exitPlanMode to request approval.',
+      );
+    });
+  });
+
+  describe('setWorkflow', () => {
+    it('creates a named workflow', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+      const doc = makeDoc();
+      const result = await fn.execute(
+        {
+          name: 'run-tests',
+          document: doc,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      const state = planState(result.state);
+      expect(state.workflows['run-tests']).toEqual(doc);
+      expect(result.result).toContain('created');
+    });
+
+    it('replaces an existing name (upsert)', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+      const updated = makeDoc(
+        makeLlmNode({
+          instructions: 'v2',
+        }),
+      );
+      const result = await fn.execute(
+        {
+          name: 'run-tests',
+          document: updated,
+        },
+        makePlanningState({
+          workflows: {
+            'run-tests': makeDoc(),
+          },
+        }),
+        makeCtx(),
+      );
+      const state = planState(result.state);
+      expect(state.workflows['run-tests']).toEqual(updated);
+      expect(result.result).toContain('replaced previous version');
+    });
+
+    it('rejects if not in planning phase', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          name: 'run-tests',
+          document: makeDoc(),
+        },
+        makeExecutingState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('Cannot set workflow');
+    });
+
+    it('rejects invalid names and accepts slug boundaries', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+      const invalid = [
+        'Foo',
+        'has space',
+        '-leading-dash',
+        'a'.repeat(65),
+      ];
+      for (const name of invalid) {
+        const result = await fn.execute(
+          {
+            name,
+            document: makeDoc(),
+          },
+          makePlanningState(),
+          makeCtx(),
+        );
+        expect(result.result).toContain('not a valid name');
+      }
+      const valid = [
+        'a',
+        'run-tests_2',
+        'a'.repeat(64),
+      ];
+      for (const name of valid) {
+        const result = await fn.execute(
+          {
+            name,
+            document: makeDoc(),
+          },
+          makePlanningState(),
+          makeCtx(),
+        );
+        expect(result.result).toContain('created');
+      }
+    });
+
+    it('enforces the workflow count cap, allowing replacement at the cap', async () => {
+      const layer = planMemory({
+        maxWorkflows: 2,
+      });
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+
+      // 1 stored + add new → ok (N-1).
+      const one = makePlanningState({
+        workflows: {
+          a: makeDoc(),
+        },
+      });
+      const addSecond = await fn.execute(
+        {
+          name: 'b',
+          document: makeDoc(),
+        },
+        one,
+        makeCtx(),
+      );
+      expect(addSecond.result).toContain('created');
+
+      // 2 stored + add new → rejected (N).
+      const two = planState(addSecond.state);
+      const addThird = await fn.execute(
+        {
+          name: 'c',
+          document: makeDoc(),
+        },
+        two,
+        makeCtx(),
+      );
+      expect(addThird.result).toContain('already has 2 workflows');
+
+      // 2 stored + replace existing → ok.
+      const replace = await fn.execute(
+        {
+          name: 'a',
+          document: makeDoc(),
+        },
+        two,
+        makeCtx(),
+      );
+      expect(replace.result).toContain('replaced previous version');
+    });
+
+    it('enforces the serialized size cap at the boundary', async () => {
+      const base = makeDoc();
+      const baseLength = JSON.stringify(base).length;
+      const layer = planMemory({
+        maxWorkflowChars: baseLength,
+      });
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+
+      // Exactly at the cap (N) → ok.
+      const atCap = await fn.execute(
+        {
+          name: 'at-cap',
+          document: base,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(atCap.result).toContain('created');
+
+      // One char over (N+1) → rejected.
+      const over = makeDoc(
+        makeLlmNode({
+          instructions: `${makeLlmNode().instructions}x`,
+        }),
+      );
+      const overCap = await fn.execute(
+        {
+          name: 'over-cap',
+          document: over,
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(overCap.result).toContain('over the');
+    });
+
+    it('rejects workflows deeper than maxDepth', async () => {
+      const layer = planMemory({
+        maxDepth: 1,
+      });
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+      const deep = makeSequence(
+        [
+          makeSequence(
+            [
+              makeLlmNode({
+                id: 'grandchild',
+              }),
+            ],
+            'child',
+          ),
+        ],
+        'root',
+      );
+      const result = await fn.execute(
+        {
+          name: 'too-deep',
+          document: makeDoc(deep),
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('exceeds maximum depth');
+    });
+
+    it('rejects documents that fail schema validation', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.setWorkflow;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          name: 'bad',
+          document: {
+            version: 1,
+            root: {
+              kind: 'nope',
+              id: 'x',
+            },
+          },
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('Cannot set workflow "bad"');
+    });
+  });
+
+  describe('removeWorkflow', () => {
+    it('removes a stored workflow', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.removeWorkflow;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          name: 'a',
+        },
+        makePlanningState({
+          workflows: {
+            a: makeDoc(),
+          },
+        }),
+        makeCtx(),
+      );
+      const state = planState(result.state);
+      expect(state.workflows).toEqual({});
+      expect(result.result).toBe('Workflow "a" removed.');
+    });
+
+    it('reports unknown names with the existing list', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.removeWorkflow;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          name: 'missing',
+        },
+        makePlanningState({
+          workflows: {
+            a: makeDoc(),
+          },
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toContain('No workflow named "missing"');
+      expect(result.result).toContain('a');
+    });
+
+    it('warns when the removed workflow is still referenced', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.removeWorkflow;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          name: 'verify',
+        },
+        makePlanningState({
+          planTree: makeDoc(makeSubflow('verify')),
+          workflows: {
+            verify: makeDoc(),
+          },
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toContain('removed');
+      expect(result.result).toContain('still referenced');
+    });
+  });
+
+  describe('getWorkflow', () => {
+    it('round-trips a stored workflow as pretty JSON', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.getWorkflow;
+      assert(fn.kind === 'function');
+      const doc = makeDoc();
+      const result = await fn.execute(
+        {
+          name: 'a',
+        },
+        makePlanningState({
+          workflows: {
+            a: doc,
+          },
+        }),
+        makeCtx(),
+      );
+      expect(JSON.parse(frameworkCast<string>(result.result))).toEqual(doc);
+    });
+
+    it('reports unknown names with the existing list', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.getWorkflow;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          name: 'missing',
+        },
+        makePlanningState(),
+        makeCtx(),
+      );
+      expect(result.result).toContain('No workflow named "missing"');
+      expect(result.result).toContain('(none)');
     });
   });
 
@@ -619,7 +1202,7 @@ describe('planMemory layer', () => {
         },
         makePlanningState({
           prd: '# PRD',
-          planTree: makeFlowNode(),
+          planTree: makeDoc(),
         }),
         makeCtx(),
       );
@@ -636,7 +1219,7 @@ describe('planMemory layer', () => {
           action: 'execute',
         },
         makePlanningState({
-          planTree: makeFlowNode(),
+          planTree: makeDoc(),
         }),
         makeCtx(),
       );
@@ -659,6 +1242,109 @@ describe('planMemory layer', () => {
       expect(result.result).toContain('no plan tree');
     });
 
+    it('rejects execute when the tree has a dangling subflow ref', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.exitPlanMode;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          action: 'execute',
+        },
+        makePlanningState({
+          prd: '# PRD',
+          planTree: makeDoc(makeSubflow('undefined-flow')),
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toContain('no matching workflow');
+      expect(result.result).toContain('"undefined-flow"');
+      expect(result.result).toContain('the plan tree');
+    });
+
+    it('rejects execute when a stored workflow has a dangling ref', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.exitPlanMode;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          action: 'execute',
+        },
+        makePlanningState({
+          prd: '# PRD',
+          planTree: makeDoc(makeSubflow('verify')),
+          workflows: {
+            verify: makeDoc(makeSubflow('lint')),
+          },
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toContain('no matching workflow');
+      expect(result.result).toContain('"lint"');
+      expect(result.result).toContain('workflow "verify"');
+    });
+
+    it('rejects execute when named workflows form a cycle', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.exitPlanMode;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          action: 'execute',
+        },
+        makePlanningState({
+          prd: '# PRD',
+          planTree: makeDoc(makeSubflow('a')),
+          workflows: {
+            a: makeDoc(makeSubflow('b')),
+            b: makeDoc(makeSubflow('a', 'back')),
+          },
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toContain('cycle');
+    });
+
+    it('rejects execute when a workflow references itself', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.exitPlanMode;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          action: 'execute',
+        },
+        makePlanningState({
+          prd: '# PRD',
+          planTree: makeDoc(makeSubflow('a')),
+          workflows: {
+            a: makeDoc(makeSubflow('a', 'again')),
+          },
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toContain('cycle');
+    });
+
+    it('executes when every ref resolves', async () => {
+      const layer = planMemory();
+      const fn = layer.provides!.exitPlanMode;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          action: 'execute',
+        },
+        makePlanningState({
+          prd: '# PRD',
+          planTree: makeDoc(makeSubflow('verify')),
+          workflows: {
+            verify: makeDoc(),
+          },
+        }),
+        makeCtx(),
+      );
+      const state = planState(result.state);
+      expect(state.phase).toBe(PlanPhase.Executing);
+    });
+
     it('cancels and resets to idle', async () => {
       const layer = planMemory();
       const fn = layer.provides!.exitPlanMode;
@@ -669,6 +1355,9 @@ describe('planMemory layer', () => {
         },
         makePlanningState({
           prd: '# Discard me',
+          workflows: {
+            a: makeDoc(),
+          },
         }),
         makeCtx(),
       );
@@ -676,6 +1365,7 @@ describe('planMemory layer', () => {
       expect(state.phase).toBe(PlanPhase.Idle);
       expect(state.prd).toBeNull();
       expect(state.planTree).toBeNull();
+      expect(state.workflows).toEqual({});
     });
 
     it('rejects if not in planning phase', async () => {
@@ -847,7 +1537,7 @@ describe('planMemory layer', () => {
       assert(fn.kind === 'function');
       const inputState = makePlanningState({
         prd: '# PRD',
-        planTree: makeFlowNode(),
+        planTree: makeDoc(),
       });
       const result = await fn.execute(
         {
@@ -874,12 +1564,38 @@ describe('planMemory layer', () => {
         },
         makePlanningState({
           prd: '# PRD',
-          planTree: makeFlowNode(),
+          planTree: makeDoc(),
         }),
         makeCtx(),
       );
       const state = planState(result.state);
       expect(state.phase).toBe(PlanPhase.Executing);
+    });
+
+    it('does not call onExit when structural validation fails', async () => {
+      let called = 0;
+      const layer = planMemory({
+        onExit: async () => {
+          called += 1;
+          return {
+            approved: true,
+          };
+        },
+      });
+      const fn = layer.provides!.exitPlanMode;
+      assert(fn.kind === 'function');
+      const result = await fn.execute(
+        {
+          action: 'execute',
+        },
+        makePlanningState({
+          prd: '# PRD',
+          planTree: makeDoc(makeSubflow('undefined-flow')),
+        }),
+        makeCtx(),
+      );
+      expect(result.result).toContain('no matching workflow');
+      expect(called).toBe(0);
     });
 
     it('appends additionalPlanInstructions to recall payload', async () => {
@@ -908,7 +1624,7 @@ describe('planMemory layer', () => {
   //#region Status Data
 
   describe('status layerData', () => {
-    it('projects phase and flags from state', () => {
+    it('projects phase, flags, and workflow names from state', () => {
       const layer = planMemory();
       const status = layer.provides!.status;
       assert(status.kind === 'data');
@@ -916,13 +1632,21 @@ describe('planMemory layer', () => {
         status.read(
           makePlanningState({
             prd: '# PRD',
-            planTree: makeFlowNode(),
+            planTree: makeDoc(),
+            workflows: {
+              b: makeDoc(),
+              a: makeDoc(),
+            },
           }),
         ),
       );
       expect(value.phase).toBe(PlanPhase.Planning);
       expect(value.hasPrd).toBe(true);
       expect(value.hasPlanTree).toBe(true);
+      expect(value.workflowNames).toEqual([
+        'a',
+        'b',
+      ]);
       expect(value.version).toBe(1);
     });
 
@@ -933,6 +1657,7 @@ describe('planMemory layer', () => {
       const value = frameworkCast<PlanStatusView>(status.read(makePlanningState()));
       expect(value.hasPrd).toBe(false);
       expect(value.hasPlanTree).toBe(false);
+      expect(value.workflowNames).toEqual([]);
     });
   });
 

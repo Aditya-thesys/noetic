@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'bun:test';
 import assert from 'node:assert';
-import type { FlowNode, LlmFlowNode, PlanState } from '@noetic-tools/memory';
+import type { PlanState } from '@noetic-tools/memory';
 import { PlanPhase, planMemory } from '@noetic-tools/memory';
+import type { WorkflowDocument } from '@noetic-tools/types';
 import { frameworkCast } from '@noetic-tools/types';
 import { makeCtx, makeItemLog } from '../../_helpers';
 
 //#region Fixtures (mirror plan.test.ts)
 
-function makeFlowNode(overrides?: Partial<LlmFlowNode>): FlowNode {
+function makeDoc(): WorkflowDocument {
   return {
-    kind: 'llm',
-    id: 'leaf',
-    instructions: 'Do the thing',
-    ...overrides,
+    version: 1,
+    root: {
+      kind: 'llm',
+      id: 'leaf',
+      instructions: 'Do the thing',
+    },
   };
 }
 
@@ -21,6 +24,7 @@ function makeIdleState(overrides?: Partial<PlanState>): PlanState {
     phase: PlanPhase.Idle,
     prd: null,
     planTree: null,
+    workflows: {},
     executionLog: [],
     version: 0,
     ...overrides,
@@ -32,6 +36,7 @@ function makePlanningState(overrides?: Partial<PlanState>): PlanState {
     phase: PlanPhase.Planning,
     prd: null,
     planTree: null,
+    workflows: {},
     executionLog: [],
     version: 1,
     ...overrides,
@@ -42,7 +47,8 @@ function makeExecutingState(overrides?: Partial<PlanState>): PlanState {
   return {
     phase: PlanPhase.Executing,
     prd: '# My Plan',
-    planTree: makeFlowNode(),
+    planTree: makeDoc(),
+    workflows: {},
     executionLog: [],
     version: 1,
     ...overrides,
@@ -104,7 +110,7 @@ describe('AUDIT: planMemory', () => {
       (
         await setTree.execute(
           {
-            tree: makeFlowNode(),
+            document: makeDoc(),
           },
           s,
           makeCtx(),
@@ -186,7 +192,7 @@ describe('AUDIT: planMemory', () => {
             content: '',
           },
           makePlanningState({
-            planTree: makeFlowNode(),
+            planTree: makeDoc(),
           }),
           makeCtx(),
         )

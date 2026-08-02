@@ -465,14 +465,20 @@ Slot `380`, scope `'execution'`. Subscribes to peer findings in `init`, drains i
 
 ## `planMemory()`
 
-Manages the full plan lifecycle: entering plan mode, authoring a PRD, structuring an execution tree, and tracking execution outcomes.
+Manages the full plan lifecycle: entering plan mode, authoring a PRD, structuring the plan as a JSON workflow document, and tracking execution outcomes. A plan's tree IS a `WorkflowDocument` (spec 26); plans additionally store NAMED workflows referenced from the tree via `subflow` nodes, keeping the human-reviewed tree small while detailed mechanics live in separately-authored workflows.
 
 ```typescript
 interface PlanMemoryConfig {
   scope?: MemoryScope;
   additionalAllowedTools?: string[];
-  maxPrdLength?: number;
-  maxTreeDepth?: number;
+  maxPrdLength?: number;                      // default 50000
+  maxDepth?: number;                          // workflowDepth cap for tree + each workflow; default 5
+  maxWorkflows?: number;                      // named workflow count cap; default 20
+  maxWorkflowChars?: number;                  // per-workflow JSON.stringify length cap; default 20000
+  allowedNodeKinds?: WorkflowNode['kind'][];  // optional profile; hosts using it must include 'subflow'
+  additionalPlanInstructions?: string;
+  onEnterSession?: PlanEnterSessionCallback;  // () => Promise<{ slug: string }>
+  onExit?: PlanExitCallback;                  // (state) => Promise<{ approved: boolean }>
 }
 
 function planMemory(config?: PlanMemoryConfig): MemoryLayer<PlanState>
@@ -494,15 +500,19 @@ type PlanPhase = 'idle' | 'planning' | 'executing' | 'completed' | 'failed';
 interface PlanState {
   phase: PlanPhase;
   prd: string | null;
-  planTree: PlanNode | null;
+  planTree: WorkflowDocument | null;
+  workflows: Record<string, WorkflowDocument>;
   executionLog: PlanExecutionEntry[];
   version: number;
+  planSlug?: string | null;   // set by onEnterSession
 }
 ```
 
+Workflow names are slugs (`/^[a-z0-9][a-z0-9_-]{0,63}$/`). Documents arriving as JSON strings (a common LLM tool-call shape) are parsed before validation; validation runs inside the layer functions via `WorkflowDocumentSchema.safeParse` — the tool-parameter schema stays `unknown` so the recursive node union is not serialized into every planning turn.
+
 **Behavior:**
-- `init`: Loads persisted `PlanState` from `ScopedStorage`. Defaults to idle with null PRD/tree.
-- `recall`: Phase-dependent context injection. Returns `null` in idle. In `planning`, renders `<plan_mode>` block with instructions and draft PRD. In `executing`, renders `<active_plan>` block with PRD and plan tree. In terminal phases, renders `<plan_outcome>` summary.
+- `init`: Loads persisted `PlanState` from `ScopedStorage`. Defaults to idle with null PRD/tree and no workflows. A persisted tree that fails `WorkflowDocumentSchema` (e.g. a legacy format) resets to `null`; a missing `workflows` map backfills to `{}`.
+- `recall`: Phase-dependent context injection. Returns `null` in idle. In `planning`, renders `<plan_mode>` block with workflow-document authoring instructions (node kinds, the schema `$id`, keep-the-tree-small guidance), the draft PRD, the current tree JSON, and one summary line per named workflow (node count + kind histogram — bodies are read back via `plan/getWorkflow`). In `executing`, renders `<active_plan>` with PRD, tree, and workflow summaries. In terminal phases, renders `<plan_outcome>`.
 - `beforeToolCall`: In `planning` phase, restricts tools to read-only (`Read`, `Grep`, `Find`, `Ls`) plus plan layer tools and `activateSkill`. Denies mutating tools (`Write`, `Edit`, `Bash`). No restrictions outside planning phase.
 - `onSpawn`: Deep-clones state to child execution.
 - `onComplete`: If `executing`, records outcome in `executionLog` and transitions to `completed` or `failed`. State is returned to the runtime for persistence.
@@ -511,13 +521,32 @@ interface PlanState {
 
 | Name | Kind | Description |
 |------|------|-------------|
-| `status` | `layerData` | Read-only projection: `{ phase, hasPrd, hasPlanTree, version }`. |
-| `enterPlanMode` | `layerFn` | Transitions idle → planning. Accepts optional `goal` string to seed the PRD. |
+| `status` | `layerData` | Read-only projection: `{ phase, hasPrd, hasPlanTree, workflowNames, version }`. |
+| `enterPlanMode` | `layerFn` | Transitions idle → planning. Accepts optional `goal` string to seed the PRD. Resets workflows from any prior plan. |
 | `updatePrd` | `layerFn` | Replaces the PRD content. Only works in planning phase. Validates max length. |
-| `setPlanTree` | `layerFn` | Sets the `PlanNode` execution tree. Validates against `PlanNodeSchema` and max depth. |
-| `exitPlanMode` | `layerFn` | Exits plan mode. `action: 'execute'` validates PRD + tree exist and transitions to executing. `action: 'cancel'` resets to idle. |
+| `setPlanTree` | `layerFn` | Sets the plan as `{ document: WorkflowDocument }`. Validates schema, depth, `allowedNodeKinds`, and subflow-ref slug syntax. Refs to not-yet-defined workflows are allowed — the success message enumerates them. |
+| `setWorkflow` | `layerFn` | Creates or replaces a named workflow (`{ name, document }`, upsert). Validates name slug, count cap (replacing at the cap is allowed), serialized size cap, depth, and `allowedNodeKinds`. |
+| `removeWorkflow` | `layerFn` | Deletes a named workflow. Warns when the tree or another workflow still references it. |
+| `getWorkflow` | `layerFn` | Returns a stored workflow's pretty-printed JSON. Read-only, works in any phase. |
+| `exitPlanMode` | `layerFn` | Exits plan mode. `action: 'execute'` validates PRD + tree exist, that every subflow ref (in the tree and inside stored workflows) names a stored workflow, and that named workflows form no reference cycle — all **before** invoking `onExit`, so the user is never asked to approve a plan that cannot hydrate. `action: 'cancel'` resets to idle. |
 
-**Integration with `compilePlan`/`adaptivePlan`:** The plan layer stores the `PlanNode` tree produced by the LLM. Advanced users can extract the tree from `status` and pass it to `compilePlan()` for programmatic execution. The default CLI flow uses context injection — the plan is recalled into the LLM's view and the model executes by making tool calls.
+**Executing an approved plan:** `PlanState.planTree` is a `WorkflowDocument` and `PlanState.workflows` maps directly onto the JSON workflow runtime's registry, so a host executes the plan with `parseAndRunWorkflow`:
+
+```typescript
+const onExit: PlanExitCallback = async (state) => {
+  const approved = await ui.requestApproval(state.prd, state.planTree, state.workflows);
+  if (approved) {
+    void parseAndRunWorkflow({
+      json: state.planTree,
+      workflows: new Map(Object.entries(state.workflows)),
+      harness, ctx, tools, layers,
+    });
+  }
+  return { approved };
+};
+```
+
+The default CLI flow instead uses context injection — the plan is recalled into the LLM's view via `<active_plan>` and the model executes by making tool calls; `parseAndRunWorkflow` is the programmatic path.
 
 ---
 
@@ -531,7 +560,7 @@ The CLI package (`packages/cli/src/memory/`) provides several memory layers buil
 | `communicationStyleLayer()` | `packages/cli/src/memory/communication-style-layer.ts` | Adaptive communication patterns (concise/normal/verbose) based on user message analysis |
 | `environmentContextLayer(config)` | `packages/cli/src/memory/environment-context-layer.ts` | Dynamic environment detection (platform, git, Node.js, shell, package manager) |
 | `toolGuidanceLayer(config)` | `packages/cli/src/memory/tool-guidance-layer.ts` | Context-aware tool preference hierarchy and mode-specific guidance |
-| `planningModeLayer(config)` | `packages/cli/src/memory/planning-mode-layer.ts` | Plan-mode instructions with FlowSchema types, PRD authoring, phase tracking |
+| `planningModeLayer(config)` | `packages/cli/src/memory/planning-mode-layer.ts` | Plan-mode instructions with workflow-document authoring, PRD authoring, phase tracking |
 | `skillsLayer(definitions, config)` | `@noetic-tools/code-agent` (`packages/code-agent/src/memory/skills-layer.ts`), re-exported via `packages/cli/src/memory/skills-layer.ts` | Progressive skill disclosure with inline command processing |
 
 These layers all use `execution` scope and `Slot.PROCEDURAL` (250) or `Slot.OBSERVATIONS` (200). They are assembled in the harness factory (`src/harness/factory.ts`) and activate when the CLI harness is created. For full documentation of each layer's slot, budget, state shape, and behavior, see `packages/cli/docs/enhanced-prompt-engineering.md`.

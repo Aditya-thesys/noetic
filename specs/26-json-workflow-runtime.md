@@ -577,24 +577,21 @@ Tree depth is enforced at parse time to prevent unbounded recursion in LLM-gener
 
 ---
 
-## Relationship to FlowSchema
+## Plan-Memory Integration
 
-`FlowSchema` (defined in `memory/flow-schema.ts`, used by the plan-memory layer) is a JSON-serialisable workflow format that predates `WorkflowNode`. The two formats serve different audiences and scopes:
+The plan memory layer (spec 12, `planMemory()`) authors plans directly in this format: `PlanState.planTree` is a `WorkflowDocument`, and `PlanState.workflows` is a `Record<string, WorkflowDocument>` of named workflows the tree references via `subflow` nodes. The layer validates documents at authoring time (schema, depth, optional node-kind profile, ref slug syntax) and rejects dangling refs and reference cycles before requesting approval.
 
-| Dimension        | FlowSchema                            | WorkflowNode                                    |
-|------------------|---------------------------------------|--------------------------------------------------|
-| **Scope**        | Plan-mode flows (plan memory layer)   | General-purpose runtime workflow format          |
-| **Node kinds**   | 5: llm, subagent, fork, spawn, sequence | 9: llm, tool, branch, fork, spawn, provide, loop, sequence, every |
-| **Until support**| None                                  | Full predicate union with combinators            |
-| **Model params** | None                                  | temperature, topP, maxTokens, stopSequences      |
-| **Tool args**    | None (tools on llm only)              | Explicit tool node with static args              |
-| **Memory layers**| None                                  | `provide` node, plus per-child layers on `spawn` |
-| **Periodics**    | None                                  | `every` node with interval + error handling      |
-| **Branching**    | None                                  | `branch` with substring match routes             |
+On approval, the host feeds both pieces straight into this runtime:
 
-`FlowSchema` is intentionally minimal -- it describes what the planner wants to happen. `WorkflowNode` is comprehensive -- it describes exactly how the runtime should execute it, including termination conditions, parallelism strategies, and memory scoping.
+```typescript
+await parseAndRunWorkflow({
+  json: state.planTree,
+  workflows: new Map(Object.entries(state.workflows)),
+  harness, ctx, tools, layers,
+});
+```
 
-The two schemas are independent. `FlowSchema` documents are not valid `WorkflowDocument`s and vice versa. A migration utility is not provided; the plan-memory layer continues to use `FlowSchema` for its narrower purpose.
+The split keeps the human-reviewed tree small — mechanics factor into named workflows the model authors and revises independently — while the whole plan stays one inspectable, portable JSON structure with stable node ids.
 
 ---
 
@@ -724,7 +721,7 @@ const WorkflowDocumentSchema = z.object({
 - `AgentHarness`, `Tool`: `08-runtime`
 - `NoeticError` kinds: `09-error-model`
 - `MemoryLayer`: `11-memory-layer-system`
-- `FlowSchema`, `FlowNode`: `memory/flow-schema.ts` (plan-memory internal)
+- `planMemory`, `PlanState`: `12-builtin-memory-layers`
 - `compilePlan`, `adaptivePlan`, `PlanNodeSchema`: `13-patterns`
 
 ---
