@@ -947,9 +947,12 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
    * the same arrangement `executeLLM` builds: harness-level context layers'
    * recall outputs concatenated with the session's accumulated history.
    *
-   * Read-mostly: `recallLayers` writes layer-state snapshots to
-   * `layerStateStore` exactly as a real turn would, so successive previews
-   * remain consistent with what the next real turn produces.
+   * Runs layer `init` on the throwaway preview context first — exactly what
+   * the next real turn's `ensureLayersInit` would do, re-hydrating thread/
+   * resource-scoped state from storage. Without it, every init-bearing layer
+   * is treated as disabled by the recall lifecycle and the preview silently
+   * degenerates to bare history. The preview execution's store entries are
+   * dropped afterwards so repeated previews don't grow the layer-state store.
    */
   async previewRequestItems(scope?: SessionScope): Promise<ReadonlyArray<Item>> {
     const threadId = scope?.threadId ?? DEFAULT_THREAD_ID;
@@ -970,16 +973,23 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
     if (layers.length === 0) {
       return historyItems;
     }
-    const recallResults = await this.recallLayers(layers, '', ctx);
-    const layerOutputItems = recallResults.flatMap((r) => r.items);
-    if (layerOutputItems.length === 0) {
-      return historyItems;
+    try {
+      await this.ensureLayersInit(ctx);
+      const recallResults = await this.recallLayers(layers, '', ctx);
+      const layerOutputItems = recallResults.flatMap((r) => r.items);
+      if (layerOutputItems.length === 0) {
+        return historyItems;
+      }
+      return assembleView({
+        systemPromptItems: [],
+        layerOutputItems,
+        historyItems,
+      });
+    } finally {
+      await this.layerStateStore.flush?.(ctx.id);
+      this.layerStateStore.cleanup(ctx.id);
+      this.initializedExecutions.delete(ctx.id);
     }
-    return assembleView({
-      systemPromptItems: [],
-      layerOutputItems,
-      historyItems,
-    });
   }
 
   async storeLayers(layers: ContextLayer[], response: LLMResponse, ctx: Context): Promise<void> {

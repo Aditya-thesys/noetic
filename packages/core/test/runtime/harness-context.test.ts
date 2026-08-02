@@ -165,6 +165,60 @@ describe('AgentHarness memory', () => {
       expect(second.id).toBe('h1');
     });
 
+    it('includes recall output from init-bearing layers (staticContent shape)', async () => {
+      // Regression: preview must run layer `init` on its throwaway context —
+      // without it the recall lifecycle treats every init-bearing layer as
+      // disabled and the preview silently degenerates to bare history. All
+      // built-in layers carry an init hook, so this is the common case.
+      const layer: ContextLayer<string> = {
+        id: 'persona',
+        name: 'persona',
+        slot: Slot.WORKING_MEMORY,
+        scope: 'resource',
+        hooks: {
+          init: async () => ({
+            state: '<instructions>be helpful</instructions>',
+          }),
+          recall: async ({ state }) => ({
+            items: [
+              {
+                id: 'persona-1',
+                type: 'message',
+                status: 'completed',
+                role: 'developer',
+                content: [
+                  {
+                    type: 'input_text',
+                    text: state ?? '',
+                  },
+                ],
+              },
+            ],
+            tokenCount: 8,
+          }),
+        },
+      };
+      const harness = new AgentHarness({
+        name: 'test',
+        memory: [
+          layer,
+        ],
+        params: {},
+        _testCallModel: createScriptedCallModel([
+          textOnlyResponse('ok'),
+        ]),
+      });
+
+      const items = await harness.previewRequestItems();
+      expect(items).toHaveLength(1);
+      const first = items[0];
+      assert(first?.type === 'message' && first.role === 'developer');
+      expect(first.id).toBe('persona-1');
+      const part = first.content[0];
+      assert(part?.type === 'input_text');
+      expect(part.text).toBe('<instructions>be helpful</instructions>');
+    });
+
     it('returns empty for an unknown thread with no history and no layers', async () => {
       const harness = new AgentHarness({
         name: 'test',

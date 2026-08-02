@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import assert from 'node:assert';
 import type { ContextData } from '@noetic-tools/context';
-import type { LLMResponse, Step, StreamEvent } from '@noetic-tools/types';
+import type { Item, LLMResponse, Step, StreamEvent, StreamingItem } from '@noetic-tools/types';
 import {
   frameworkCast,
   ItemSchemaRegistry,
@@ -304,6 +304,55 @@ describe('AgentHarness session accessors', () => {
     expect(response.text).toBe('multi');
   });
 
+  it('getItemStream carries framework-authored items: turn inputs and tool results', async () => {
+    const noopTool = tool({
+      name: 'noop',
+      description: 'Always returns ok',
+      input: z.object({}),
+      output: z.object({
+        ok: z.boolean(),
+      }),
+      execute: async () => ({
+        ok: true,
+      }),
+    });
+    const toolStep: Step<ContextData, string, string> = {
+      kind: 'llm',
+      id: 'tooled',
+      model: 'test/model',
+      tools: [
+        noopTool,
+      ],
+    };
+    const harness = new AgentHarness({
+      name: 'test',
+      initialStep: toolStep,
+      params: {},
+    });
+    const fakeClient = new DecoratingToolClient('noop', '{}');
+    frameworkCast<{
+      client: DecoratingToolClient;
+    }>(harness).client = fakeClient;
+
+    const collected: StreamingItem[] = [];
+    async function pumpItems(): Promise<void> {
+      for await (const item of harness.getItemStream()) {
+        collected.push(item);
+      }
+    }
+    void pumpItems();
+
+    await harness.execute('use the noop tool');
+    await harness.getAgentResponse();
+    // Let the broadcaster's queued events flush through the pump.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(collected.some((item) => item.type === 'message' && item.role === 'user')).toBe(true);
+    expect(
+      collected.some((item) => item.type === 'function_call_output' && item.callId === 'call-noop'),
+    ).toBe(true);
+  });
+
   it('recovers from the tool-round limit with an ephemeral continue retry', async () => {
     const fakeClient = new ToolLimitRecoveryClient();
     const noopTool = tool({
@@ -562,6 +611,63 @@ describe('session-streams — filterReasoningStream', () => {
 });
 
 describe('session-streams — buildItemStream', () => {
+  it('yields framework item_appended items as complete, ignoring other framework events', async () => {
+    const bc = new EventBroadcaster();
+    const userItem: Item = {
+      id: 'user-1',
+      type: 'message',
+      role: 'user',
+      status: 'completed',
+      content: [
+        {
+          type: 'input_text',
+          text: 'hi',
+        },
+      ],
+    };
+    const outputItem: Item = {
+      id: 'out-1',
+      type: 'function_call_output',
+      status: 'completed',
+      callId: 'call-1',
+      output: '{"ok":true}',
+    };
+
+    queueMicrotask(() => {
+      bc.emit({
+        source: 'framework',
+        type: 'agent:turn_started',
+        data: {
+          turnId: 't1',
+          messageIds: [],
+        },
+      });
+      bc.emit({
+        source: 'framework',
+        type: 'agent:item_appended',
+        data: {
+          item: userItem,
+        },
+      });
+      bc.emit({
+        source: 'framework',
+        type: 'agent:item_appended',
+        data: {
+          item: outputItem,
+        },
+      });
+      bc.complete();
+    });
+
+    const items = await collect(buildItemStream(bc));
+    expect(items).toHaveLength(2);
+    expect(items[0]?.isComplete).toBe(true);
+    assert(items[0]?.type === 'message' && items[0].role === 'user');
+    assert(items[1]?.type === 'function_call_output');
+    expect(items[1].callId).toBe('call-1');
+    expect(items[1].isComplete).toBe(true);
+  });
+
   it('yields progressive message snapshots with isComplete transition', async () => {
     const bc = new EventBroadcaster();
 

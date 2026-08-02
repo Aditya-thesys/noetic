@@ -434,6 +434,23 @@ export class AgentHarnessModelCaller {
     );
   }
 
+  /**
+   * Broadcast a framework-authored item so `getItemStream` carries it — tool
+   * results and injected messages never appear in the SDK stream. Emitted
+   * unconditionally: item streaming, like the SDK item events, is not subject
+   * to `step.emit` filtering.
+   */
+  private emitItemAppended(ctx: Context | undefined, item: Item): void {
+    emitFrameworkEvent({
+      broadcaster: getBroadcaster(ctx),
+      agentName: this.opts.agentName,
+      eventType: 'item_appended',
+      data: {
+        item,
+      },
+    });
+  }
+
   private async callOverriddenModel(request: CallModelRequest): Promise<LLMResponse> {
     if (!this.opts.callModelOverride) {
       throw new Error('No callModel override configured.');
@@ -725,6 +742,7 @@ export class AgentHarnessModelCaller {
         ],
       });
       ctx.itemLog.append(userItem);
+      this.emitItemAppended(ctx, userItem);
     }
     emitIfAllowed('inbox_injected', {
       round,
@@ -933,6 +951,7 @@ export class AgentHarnessModelCaller {
       callId: fc.callId,
       output: toolResult.output,
     });
+    this.emitItemAppended(request.ctx, outputItem);
     params.emitIfAllowed('tool_call_completed', {
       name: fc.name,
       callId: fc.callId,
@@ -970,6 +989,7 @@ export class AgentHarnessModelCaller {
       callId: fc.callId,
       output: errorOutput,
     });
+    this.emitItemAppended(request.ctx, outputItem);
     params.emitIfAllowed('tool_call_completed', {
       name: fc.name,
       callId: fc.callId,

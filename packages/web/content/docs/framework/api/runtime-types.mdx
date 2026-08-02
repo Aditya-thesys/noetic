@@ -146,7 +146,7 @@ declare interface RerenderRequest {
 | `projectHistory(layers, items, ctx)` | Run each layer's `projectHistory` hook in slot order to project (cap, transform) the history portion of the context window. Read-side only. |
 | `runAppendPipeline(layers, items, ctx)` | Run input items through each layer's `onItemAppend` hook in slot order, returning the transformed items plus any re-render requests. |
 | `executeRerender(requests, layers, ctx, budgets, query?)` | Re-run recall for the layers selected by the given re-render requests and return their fresh outputs. |
-| `previewRequestItems(scope?)` | Return the `Item[]` that would be sent on the next turn — accumulated history plus harness-level layer recall outputs. Read-mostly; no session is allocated for unknown thread ids. |
+| `previewRequestItems(scope?)` | Return the `Item[]` that would be sent on the next turn — accumulated history plus harness-level layer recall outputs. Inits layers on a throwaway context (hydrating scoped state from storage) and drops its state entries afterwards; no session is allocated for unknown thread ids. |
 | `storeLayers(layers, response, ctx)` | Run store on all layers. |
 | `disposeLayers(layers, ctx)` | Dispose all layers. |
 | `getLayerState(executionId, layerId)` | Read a layer's state for a given execution. |

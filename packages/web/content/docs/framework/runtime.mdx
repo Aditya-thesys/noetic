@@ -118,7 +118,7 @@ Stream accessors are keyed by `threadId` (via `SessionScope`), are safe to call 
 | `getAgentResponse(scope?)` | `Promise<HarnessResponse>` | Resolves once the session drains its queue and returns to idle. |
 | `getTextStream(scope?)` | `AsyncIterable<string>` | Text deltas from the model, across all turns. |
 | `getReasoningStream(scope?)` | `AsyncIterable<string>` | Reasoning token deltas (reasoning models). |
-| `getItemStream(scope?)` | `AsyncIterable<StreamingItem>` | Cumulative item snapshots with `isComplete` flag. |
+| `getItemStream(scope?)` | `AsyncIterable<StreamingItem>` | Cumulative item snapshots with `isComplete` flag. Carries the full session log — framework-authored items (turn inputs, tool results) included. |
 | `getFullStream(scope?)` | `AsyncIterable<StreamEvent>` | All raw events (SDK + framework) for the session. |
 | `abort(scope?)` | `Promise<void>` | Cancel the in-flight turn. Queued messages are preserved and trigger a fresh turn once abort completes. |
 | `getStatus(scope?)` | `HarnessStatus` | Snapshot: `{ kind: 'idle' \| 'generating' \| 'aborting' }`. |
@@ -225,7 +225,7 @@ The agent harness coordinates [context layer](/docs/framework/context-layers) li
 |---|---|
 | `initLayers` | Initialize layers at the start of an agent run. Loads persisted state from storage. |
 | `recallLayers` | Query layers for relevant items given an input string. Returns `RecallLayerOutput[]`. |
-| `previewRequestItems` | Return the `Item[]` that would be sent on the next turn — accumulated history plus harness-level layer recall outputs assembled via `assembleView`. Read-mostly debug helper; safe to call between turns. |
+| `previewRequestItems` | Return the `Item[]` that would be sent on the next turn — accumulated history plus harness-level layer recall outputs assembled via `assembleView`. Inits layers on a throwaway context so init-bearing layers contribute; safe to call between turns. |
 | `storeLayers` | Write new items from an LLM response into layers. |
 | `disposeLayers` | Clean up layers at the end of a run. |
 

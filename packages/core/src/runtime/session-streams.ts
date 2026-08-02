@@ -1,5 +1,5 @@
 import type { Item, ItemSchemaRegistry, StreamEvent, StreamingItem } from '@noetic-tools/types';
-import { defaultItemSchemaRegistry } from '@noetic-tools/types';
+import { defaultItemSchemaRegistry, frameworkCast } from '@noetic-tools/types';
 import type { EventBroadcaster } from './event-broadcaster';
 
 //#region Types
@@ -199,7 +199,11 @@ export async function* filterReasoningStream(broadcaster: EventBroadcaster): Asy
 
 /** @internal Yield cumulative StreamingItem snapshots. Uses roundOffset keyed by
  *  response.created so accumulators across multiple tool rounds and across
- *  multiple turns within a session don't collide. */
+ *  multiple turns within a session don't collide.
+ *
+ *  SDK events cover model output only; framework-authored items — turn input
+ *  messages, between-rounds injections, tool results — arrive via the
+ *  `item_appended` framework event and are yielded already complete. */
 export async function* buildItemStream(
   broadcaster: EventBroadcaster,
   itemSchemas: ItemSchemaRegistry = defaultItemSchemaRegistry,
@@ -208,6 +212,19 @@ export async function* buildItemStream(
   let roundOffset = 0;
 
   for await (const event of broadcaster) {
+    if (event.source === 'framework') {
+      if (
+        event.type.endsWith(':item_appended') &&
+        typeof event.data.item === 'object' &&
+        event.data.item !== null
+      ) {
+        yield {
+          ...frameworkCast<Item>(event.data.item),
+          isComplete: true,
+        };
+      }
+      continue;
+    }
     if (event.source !== 'sdk') {
       continue;
     }

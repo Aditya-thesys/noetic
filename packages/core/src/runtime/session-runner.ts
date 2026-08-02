@@ -237,6 +237,18 @@ export class SessionRunner {
         messageIds: messages.map((m) => m.id),
       },
     });
+    // Input items never appear in the SDK stream — item_appended is what
+    // carries them into getItemStream (and any other log-faithful consumer).
+    for (const item of items) {
+      emitFrameworkEvent({
+        broadcaster: this.broadcaster,
+        agentName: this.agentName,
+        eventType: 'item_appended',
+        data: {
+          item,
+        },
+      });
+    }
 
     const turn: TurnContext = {
       turnId,
