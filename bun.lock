@@ -20,7 +20,7 @@
     },
     "packages/context": {
       "name": "@noetic-tools/context",
-      "version": "2.0.0",
+      "version": "1.0.0",
       "dependencies": {
         "@noetic-tools/types": "workspace:*",
         "zod": "^4.0.0",
