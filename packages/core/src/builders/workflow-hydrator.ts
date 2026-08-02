@@ -597,12 +597,12 @@ function hydrateSubHarnessNode(
 function hydrateSubflowNode(
   node: WorkflowNode,
   ctx: HydrationContext,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   if (node.kind !== 'subflow') {
     return frameworkCast(undefined);
   }
-  let cached: Step<ContextMemory, string, string> | undefined;
-  const resolve = (): Step<ContextMemory, string, string> => {
+  let cached: Step<ContextData, string, string> | undefined;
+  const resolve = (): Step<ContextData, string, string> => {
     if (!cached) {
       const { doc, childCtx } = resolveSubflowDocument(node, ctx);
       cached = hydrateNode(suffixNodeIds(doc.root, `-${node.id}`), childCtx);

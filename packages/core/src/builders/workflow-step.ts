@@ -6,7 +6,7 @@
  * an import cycle. This module composes the public `step` namespace instead.
  */
 
-import type { ContextMemory, MemoryLayer } from '@noetic-tools/memory';
+import type { ContextData, ContextLayer } from '@noetic-tools/context';
 import type {
   Context,
   ExecuteStepFn,
@@ -36,8 +36,8 @@ export interface StepWorkflowOpts {
   ref?: string;
   /** Client tools the document's `llm`/`tool` nodes may reference by name. Default: none. */
   tools?: Tool[];
-  /** Named memory layers for `provide`/`spawn` nodes. */
-  layers?: ReadonlyMap<string, MemoryLayer>;
+  /** Named context layers for `provide`/`spawn` nodes. */
+  layers?: ReadonlyMap<string, ContextLayer>;
   /** Named sub-workflows for `subflow` nodes — and for resolving `ref` itself. */
   workflows?: ReadonlyMap<string, WorkflowDocument>;
   /** SubHarness adapters for `claude-code`/`codex`/`opencode`/`pi` nodes. */
@@ -71,7 +71,7 @@ export interface StepWorkflowOpts {
  * @throws `NoeticConfigError` with code `MISSING_HARNESS_CONTEXT` (at execution) without `ctx.harness`.
  * @throws `NoeticConfigError` with code `UNKNOWN_WORKFLOW_REFERENCE` (at execution) if `ref` names no registered workflow.
  */
-export function stepWorkflow(opts: StepWorkflowOpts): StepRun<ContextMemory, string, string> {
+export function stepWorkflow(opts: StepWorkflowOpts): StepRun<ContextData, string, string> {
   if (!opts.id || opts.id.trim() === '') {
     throw new NoeticConfigError({
       code: 'EMPTY_STEP_ID',
@@ -94,7 +94,7 @@ export function stepWorkflow(opts: StepWorkflowOpts): StepRun<ContextMemory, str
   let cached:
     | {
         harness: unknown;
-        step: Step<ContextMemory, string, string>;
+        step: Step<ContextData, string, string>;
       }
     | undefined;
 
@@ -134,7 +134,7 @@ export const step = {
 function hydrate(
   opts: StepWorkflowOpts,
   executeStep: ExecuteStepFn,
-): Step<ContextMemory, string, string> {
+): Step<ContextData, string, string> {
   const doc = opts.document ?? (opts.ref ? opts.workflows?.get(opts.ref) : undefined);
   if (!doc) {
     throw new NoeticConfigError({

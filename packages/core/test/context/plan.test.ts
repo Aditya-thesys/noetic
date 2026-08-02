@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import assert from 'node:assert';
-import type { PlanExecutionEntry, PlanState } from '@noetic-tools/memory';
-import { PlanPhase, planMemory } from '@noetic-tools/memory';
+import type { PlanExecutionEntry, PlanState } from '@noetic-tools/context';
+import { PlanPhase, planContext } from '@noetic-tools/context';
 import type {
   LlmWorkflowNode,
   SequenceWorkflowNode,
@@ -101,16 +101,16 @@ interface PlanStatusView {
 
 //#region Layer Metadata
 
-describe('planMemory layer', () => {
+describe('planContext layer', () => {
   it('has correct id and slot', () => {
-    const layer = planMemory();
+    const layer = planContext();
     expect(layer.id).toBe('plan');
     expect(layer.slot).toBe(240);
     expect(layer.scope).toBe('thread');
   });
 
   it('respects custom scope config', () => {
-    const layer = planMemory({
+    const layer = planContext({
       scope: 'execution',
     });
     expect(layer.scope).toBe('execution');
@@ -122,7 +122,7 @@ describe('planMemory layer', () => {
 
   describe('init', () => {
     it('defaults to idle state', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.init!({
         storage: makeScopedStorage(),
         scopeKey: 'thread-1',
@@ -143,7 +143,7 @@ describe('planMemory layer', () => {
       });
       await storage.set('state', saved);
 
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.init!({
         storage,
         scopeKey: 'thread-1',
@@ -171,7 +171,7 @@ describe('planMemory layer', () => {
       };
       await storage.set('state', legacy);
 
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.init!({
         storage,
         scopeKey: 'thread-1',
@@ -197,7 +197,7 @@ describe('planMemory layer', () => {
         },
       });
 
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.init!({
         storage,
         scopeKey: 'thread-1',
@@ -225,7 +225,7 @@ describe('planMemory layer', () => {
 
   describe('recall', () => {
     it('returns null in idle phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
         query: '',
@@ -237,7 +237,7 @@ describe('planMemory layer', () => {
     });
 
     it('returns plan_mode block with workflow vocabulary in planning phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
         query: '',
@@ -264,7 +264,7 @@ describe('planMemory layer', () => {
     });
 
     it('lists named workflows as summaries, not bodies, in planning recall', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
         query: '',
@@ -299,7 +299,7 @@ describe('planMemory layer', () => {
     });
 
     it('returns active_plan block with workflow names in executing phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
         query: '',
@@ -323,7 +323,7 @@ describe('planMemory layer', () => {
     });
 
     it('returns plan_outcome in completed phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
         query: '',
@@ -355,7 +355,7 @@ describe('planMemory layer', () => {
     });
 
     it('returns plan_outcome in failed phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const result = await layer.hooks.recall!({
         log: makeItemLog(),
         query: '',
@@ -393,7 +393,7 @@ describe('planMemory layer', () => {
 
   describe('beforeToolCall', () => {
     it('allows all tools outside plan mode', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.beforeToolCall);
       const result = await layer.hooks.beforeToolCall({
         toolName: 'Bash',
@@ -405,7 +405,7 @@ describe('planMemory layer', () => {
     });
 
     it('allows read-only tools in plan mode', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.beforeToolCall);
       const readOnlyTools = [
         'Read',
@@ -426,7 +426,7 @@ describe('planMemory layer', () => {
     });
 
     it('allows plan layer tools in plan mode', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.beforeToolCall);
       const planTools = [
         'plan/enterPlanMode',
@@ -450,7 +450,7 @@ describe('planMemory layer', () => {
     });
 
     it('denies mutating tools in plan mode', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.beforeToolCall);
       const deniedTools = [
         'Write',
@@ -471,7 +471,7 @@ describe('planMemory layer', () => {
     });
 
     it('allows additional tools from config', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         additionalAllowedTools: [
           'CustomTool',
         ],
@@ -487,7 +487,7 @@ describe('planMemory layer', () => {
     });
 
     it('allows all tools in executing phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.beforeToolCall);
       const result = await layer.hooks.beforeToolCall({
         toolName: 'Bash',
@@ -505,7 +505,7 @@ describe('planMemory layer', () => {
 
   describe('enterPlanMode', () => {
     it('transitions from idle to planning', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.enterPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -522,7 +522,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects if not idle', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.enterPlanMode;
       assert(fn.kind === 'function');
       const inputState = makePlanningState();
@@ -532,7 +532,7 @@ describe('planMemory layer', () => {
     });
 
     it('seeds PRD with goal when provided', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.enterPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -547,7 +547,7 @@ describe('planMemory layer', () => {
     });
 
     it('resets workflows from a previous plan', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.enterPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -564,7 +564,7 @@ describe('planMemory layer', () => {
     });
 
     it('leaves PRD null when no goal', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.enterPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute({}, makeIdleState(), makeCtx());
@@ -575,7 +575,7 @@ describe('planMemory layer', () => {
 
   describe('updatePrd', () => {
     it('updates PRD in planning phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.updatePrd;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -591,7 +591,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects if not in planning phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.updatePrd;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -605,7 +605,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects if content exceeds max length', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxPrdLength: 100,
       });
       const fn = layer.provides!.updatePrd;
@@ -621,7 +621,7 @@ describe('planMemory layer', () => {
     });
 
     it('accepts content at max length boundary', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxPrdLength: 100,
       });
       const fn = layer.provides!.updatePrd;
@@ -637,7 +637,7 @@ describe('planMemory layer', () => {
     });
 
     it('accepts content below max length boundary (N-1)', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxPrdLength: 100,
       });
       const fn = layer.provides!.updatePrd;
@@ -655,7 +655,7 @@ describe('planMemory layer', () => {
 
   describe('setPlanTree', () => {
     it('sets a workflow document in planning phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const doc = makeDoc();
@@ -672,7 +672,7 @@ describe('planMemory layer', () => {
     });
 
     it('accepts a JSON-stringified document', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const doc = makeDoc();
@@ -688,7 +688,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects a document that fails schema validation', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -709,7 +709,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects a value that is not valid JSON', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -723,7 +723,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects if not in planning phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -737,7 +737,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects if tree exceeds max depth', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxDepth: 1,
       });
       const fn = layer.provides!.setPlanTree;
@@ -767,7 +767,7 @@ describe('planMemory layer', () => {
     });
 
     it('accepts tree at max depth boundary', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxDepth: 1,
       });
       const fn = layer.provides!.setPlanTree;
@@ -792,7 +792,7 @@ describe('planMemory layer', () => {
     });
 
     it('accepts tree below max depth boundary (N-1)', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxDepth: 1,
       });
       const fn = layer.provides!.setPlanTree;
@@ -808,7 +808,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects node kinds outside allowedNodeKinds', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         allowedNodeKinds: [
           'sequence',
           'llm',
@@ -836,7 +836,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects subflow refs that are not valid workflow names', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -850,7 +850,7 @@ describe('planMemory layer', () => {
     });
 
     it('lists not-yet-defined subflow refs in the success message', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -873,7 +873,7 @@ describe('planMemory layer', () => {
     });
 
     it('reports plain success when every ref is defined', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setPlanTree;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -895,7 +895,7 @@ describe('planMemory layer', () => {
 
   describe('setWorkflow', () => {
     it('creates a named workflow', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setWorkflow;
       assert(fn.kind === 'function');
       const doc = makeDoc();
@@ -913,7 +913,7 @@ describe('planMemory layer', () => {
     });
 
     it('replaces an existing name (upsert)', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setWorkflow;
       assert(fn.kind === 'function');
       const updated = makeDoc(
@@ -939,7 +939,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects if not in planning phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setWorkflow;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -954,7 +954,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects invalid names and accepts slug boundaries', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setWorkflow;
       assert(fn.kind === 'function');
       const invalid = [
@@ -993,7 +993,7 @@ describe('planMemory layer', () => {
     });
 
     it('enforces the workflow count cap, allowing replacement at the cap', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxWorkflows: 2,
       });
       const fn = layer.provides!.setWorkflow;
@@ -1042,7 +1042,7 @@ describe('planMemory layer', () => {
     it('enforces the serialized size cap at the boundary', async () => {
       const base = makeDoc();
       const baseLength = JSON.stringify(base).length;
-      const layer = planMemory({
+      const layer = planContext({
         maxWorkflowChars: baseLength,
       });
       const fn = layer.provides!.setWorkflow;
@@ -1076,7 +1076,7 @@ describe('planMemory layer', () => {
       expect(overCap.result).toContain('over the');
 
       // One char under the cap (N-1) → ok.
-      const roomy = planMemory({
+      const roomy = planContext({
         maxWorkflowChars: baseLength + 1,
       });
       const roomyFn = roomy.provides!.setWorkflow;
@@ -1093,7 +1093,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects workflows deeper than maxDepth', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         maxDepth: 1,
       });
       const fn = layer.provides!.setWorkflow;
@@ -1123,7 +1123,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects documents that fail schema validation', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.setWorkflow;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1146,7 +1146,7 @@ describe('planMemory layer', () => {
 
   describe('removeWorkflow', () => {
     it('removes a stored workflow', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.removeWorkflow;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1166,7 +1166,7 @@ describe('planMemory layer', () => {
     });
 
     it('reports unknown names with the existing list', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.removeWorkflow;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1185,7 +1185,7 @@ describe('planMemory layer', () => {
     });
 
     it('warns when the removed workflow is still referenced', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.removeWorkflow;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1207,7 +1207,7 @@ describe('planMemory layer', () => {
 
   describe('getWorkflow', () => {
     it('round-trips a stored workflow as pretty JSON', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.getWorkflow;
       assert(fn.kind === 'function');
       const doc = makeDoc();
@@ -1226,7 +1226,7 @@ describe('planMemory layer', () => {
     });
 
     it('reports unknown names with the existing list', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.getWorkflow;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1243,7 +1243,7 @@ describe('planMemory layer', () => {
 
   describe('exitPlanMode', () => {
     it('transitions to executing when PRD and tree exist', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1261,7 +1261,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects execute without PRD', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1277,7 +1277,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects execute without plan tree', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1293,7 +1293,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects execute when the tree has a dangling subflow ref', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1312,7 +1312,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects execute when a stored workflow has a dangling ref', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1334,7 +1334,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects execute when named workflows form a cycle', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1355,7 +1355,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects execute when a workflow references itself', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1375,7 +1375,7 @@ describe('planMemory layer', () => {
     });
 
     it('executes when every ref resolves', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1396,7 +1396,7 @@ describe('planMemory layer', () => {
     });
 
     it('cancels and resets to idle', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1419,7 +1419,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejects if not in planning phase', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.exitPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute(
@@ -1439,7 +1439,7 @@ describe('planMemory layer', () => {
 
   describe('onSpawn', () => {
     it('clones state to child', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.onSpawn);
       const parentState = makeExecutingState();
       const result = await layer.hooks.onSpawn({
@@ -1458,7 +1458,7 @@ describe('planMemory layer', () => {
 
   describe('onComplete', () => {
     it('records success when executing', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.onComplete);
       const result = await layer.hooks.onComplete({
         state: makeExecutingState(),
@@ -1474,7 +1474,7 @@ describe('planMemory layer', () => {
     });
 
     it('records failure when executing', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.onComplete);
       const result = await layer.hooks.onComplete({
         state: makeExecutingState(),
@@ -1490,7 +1490,7 @@ describe('planMemory layer', () => {
     });
 
     it('records aborted outcome when executing', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.onComplete);
       const result = await layer.hooks.onComplete({
         state: makeExecutingState(),
@@ -1506,7 +1506,7 @@ describe('planMemory layer', () => {
     });
 
     it('does not modify state when not executing', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.onComplete);
       const result = await layer.hooks.onComplete({
         state: makePlanningState(),
@@ -1518,7 +1518,7 @@ describe('planMemory layer', () => {
     });
 
     it('caps executionLog at max entries', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       assert(layer.hooks.onComplete);
       const longLog: PlanExecutionEntry[] = Array.from(
         {
@@ -1552,7 +1552,7 @@ describe('planMemory layer', () => {
   describe('host callbacks', () => {
     it('calls onEnterSession and stores returned slug in state', async () => {
       let called = 0;
-      const layer = planMemory({
+      const layer = planContext({
         onEnterSession: async () => {
           called += 1;
           return {
@@ -1569,7 +1569,7 @@ describe('planMemory layer', () => {
     });
 
     it('leaves planSlug null when no callback configured', async () => {
-      const layer = planMemory();
+      const layer = planContext();
       const fn = layer.provides!.enterPlanMode;
       assert(fn.kind === 'function');
       const result = await fn.execute({}, makeIdleState(), makeCtx());
@@ -1578,7 +1578,7 @@ describe('planMemory layer', () => {
     });
 
     it('rejected onExit keeps phase in Planning and reports rejection', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         onExit: async () => ({
           approved: false,
         }),
@@ -1601,7 +1601,7 @@ describe('planMemory layer', () => {
     });
 
     it('approved onExit transitions to Executing', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         onExit: async () => ({
           approved: true,
         }),
@@ -1624,7 +1624,7 @@ describe('planMemory layer', () => {
 
     it('does not call onExit when structural validation fails', async () => {
       let called = 0;
-      const layer = planMemory({
+      const layer = planContext({
         onExit: async () => {
           called += 1;
           return {
@@ -1649,7 +1649,7 @@ describe('planMemory layer', () => {
     });
 
     it('appends additionalPlanInstructions to recall payload', async () => {
-      const layer = planMemory({
+      const layer = planContext({
         additionalPlanInstructions: 'PROJECT_RULE: do not touch the auth module.',
       });
       const result = await layer.hooks.recall!({
@@ -1675,7 +1675,7 @@ describe('planMemory layer', () => {
 
   describe('status layerData', () => {
     it('projects phase, flags, and workflow names from state', () => {
-      const layer = planMemory();
+      const layer = planContext();
       const status = layer.provides!.status;
       assert(status.kind === 'data');
       const value = frameworkCast<PlanStatusView>(
@@ -1701,7 +1701,7 @@ describe('planMemory layer', () => {
     });
 
     it('reports false when PRD and tree are null', () => {
-      const layer = planMemory();
+      const layer = planContext();
       const status = layer.provides!.status;
       assert(status.kind === 'data');
       const value = frameworkCast<PlanStatusView>(status.read(makePlanningState()));

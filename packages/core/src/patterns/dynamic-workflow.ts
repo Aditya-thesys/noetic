@@ -3,7 +3,7 @@
  * then hydrates and runs it within the same harness session.
  */
 
-import type { ContextMemory, MemoryLayer } from '@noetic-tools/memory';
+import type { ContextData, ContextLayer } from '@noetic-tools/context';
 import type {
   AgentHarnessContract,
   Context,
@@ -81,7 +81,7 @@ Respond with ONLY the JSON document, no markdown fences or explanation.`;
  * @param opts.maxRevisions - Retries with error feedback on validation failure. Default: 3.
  * @returns A `Step` that dynamically plans and executes.
  */
-export function dynamicWorkflow(opts: DynamicWorkflowOpts): Step<ContextMemory, string, string> {
+export function dynamicWorkflow(opts: DynamicWorkflowOpts): Step<ContextData, string, string> {
   const model = opts.model ?? DEFAULT_MODEL;
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxRevisions = opts.maxRevisions ?? DEFAULT_MAX_REVISIONS;
@@ -166,11 +166,11 @@ export interface ParseAndRunWorkflowOpts {
   input?: string;
   maxDepth?: number;
   /**
-   * Memory layers the document's `provide` / `spawn` nodes may reference by name.
+   * Context layers the document's `provide` / `spawn` nodes may reference by name.
    * Without a registry those nodes resolve to NO layers rather than failing, so a
    * host that runs layer-bearing workflows must pass its layers here.
    */
-  layers?: ReadonlyMap<string, MemoryLayer>;
+  layers?: ReadonlyMap<string, ContextLayer>;
   /** Named sub-workflows the document's `subflow` nodes may reference via `ref`. */
   workflows?: ReadonlyMap<string, WorkflowDocument>;
 }

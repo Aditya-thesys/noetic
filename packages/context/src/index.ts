@@ -18,7 +18,6 @@ export type {
 export * from '@noetic-tools/types/contract';
 export * from './context/budget';
 export * from './context/exec-context-factory';
-export * from './context/flow-schema';
 export * from './context/function-call-utils';
 export * from './context/layer-api';
 export * from './context/layer-lifecycle';

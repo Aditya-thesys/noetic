@@ -1,4 +1,9 @@
-import type { MemoryLayer, MemoryScope, WorkflowDocument, WorkflowNode } from '@noetic-tools/types';
+import type {
+  ContextLayer,
+  ContextScope,
+  WorkflowDocument,
+  WorkflowNode,
+} from '@noetic-tools/types';
 import {
   createMessage,
   estimateTokens,
@@ -91,8 +96,8 @@ export type PlanExitCallback = (state: PlanState) => Promise<{
   approved: boolean;
 }>;
 
-export interface PlanMemoryConfig {
-  scope?: MemoryScope;
+export interface PlanContextConfig {
+  scope?: ContextScope;
   additionalAllowedTools?: string[];
   maxPrdLength?: number;
   /** Max structural depth (`workflowDepth`) of the plan tree and each named workflow. Default 5. */
@@ -312,7 +317,7 @@ function findWorkflowCycle(workflows: Record<string, WorkflowDocument>): string[
   return null;
 }
 
-function buildAllowedTools(config?: PlanMemoryConfig): Set<string> {
+function buildAllowedTools(config?: PlanContextConfig): Set<string> {
   if (!config?.additionalAllowedTools?.length) {
     return ALLOWED_TOOLS_IN_PLAN_MODE;
   }
@@ -447,7 +452,7 @@ const RECALL_RENDERERS: Partial<Record<PlanPhase, RecallRenderer>> = {
 //#region Public API
 
 /**
- * Creates a plan memory layer that manages the PRD authoring and plan execution lifecycle.
+ * Creates a plan context layer that manages the PRD authoring and plan execution lifecycle.
  *
  * The plan tree is a JSON `WorkflowDocument`; plans additionally store named
  * workflows referenced from the tree via `subflow` nodes, keeping the reviewed
@@ -456,10 +461,10 @@ const RECALL_RENDERERS: Partial<Record<PlanPhase, RecallRenderer>> = {
  *
  * @public
  * @param config - Optional configuration for scope, allowed tools, and limits.
- * @returns A `MemoryLayer` providing plan mode, PRD storage, and execution tracking.
+ * @returns A `ContextLayer` providing plan mode, PRD storage, and execution tracking.
  */
-export function planMemory(config?: PlanMemoryConfig): MemoryLayer<PlanState> {
-  const scope: MemoryScope = config?.scope ?? 'thread';
+export function planContext(config?: PlanContextConfig): ContextLayer<PlanState> {
+  const scope: ContextScope = config?.scope ?? 'thread';
   const maxPrdLength = config?.maxPrdLength ?? MAX_PRD_LENGTH;
   const maxWorkflows = config?.maxWorkflows ?? MAX_WORKFLOWS;
   const maxWorkflowChars = config?.maxWorkflowChars ?? MAX_WORKFLOW_CHARS;
@@ -959,7 +964,7 @@ export function planMemory(config?: PlanMemoryConfig): MemoryLayer<PlanState> {
         };
       },
     },
-  } satisfies MemoryLayer<PlanState>;
+  } satisfies ContextLayer<PlanState>;
 }
 
 //#endregion
