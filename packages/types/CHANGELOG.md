@@ -1,3 +1,7 @@
+## @noetic-tools/types-v2.3.0 (2026-08-02)
+
+* feat: rename the memory layer system to context layers ([123810f](https://github.com/mattapperson/noetic/commit/123810f))
+
 ## @noetic-tools/types-v2.2.0 (2026-08-02)
 
 * feat(core): add subflow workflow node with named sub-workflow registry ([82c2529](https://github.com/mattapperson/noetic/commit/82c2529))
