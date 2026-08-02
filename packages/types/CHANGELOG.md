@@ -1,3 +1,17 @@
+## @noetic-tools/types-v3.0.0 (2026-08-02)
+
+* feat(core): add chat-sdk.dev integration and external channel read surface (#66) ([793f441](https://github.com/mattapperson/noetic/commit/793f441)), closes [#66](https://github.com/mattapperson/noetic/issues/66)
+
+### BREAKING CHANGE
+
+* AgentHarnessContract and the context-side harness
+interface gain getChannelStream, and completed executions now close
+their external channels — ChannelHandle.send after the root execution
+finishes throws channel_closed where it previously silently succeeded.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HkrR1XYrDR5fo7tsYQW4be
+
 ## @noetic-tools/types-v2.3.0 (2026-08-02)
 
 * feat: rename the memory layer system to context layers ([123810f](https://github.com/mattapperson/noetic/commit/123810f))
