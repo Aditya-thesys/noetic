@@ -1,6 +1,6 @@
 ---
 title: Steering
-description: A memory layer that enforces behavioral rules before tool calls and after model responses, with programmatic and LLM-evaluated rules.
+description: A context layer that enforces behavioral rules before tool calls and after model responses, with programmatic and LLM-evaluated rules.
 ---
 
 ## Overview
@@ -48,7 +48,7 @@ interface SteeringConfig {
   rules: SteeringRule[];
   maxLedgerEntries?: number;  // default 100
   maxRetries?: number;        // default 1
-  scope?: MemoryScope;        // default 'execution'
+  scope?: ContextScope;        // default 'execution'
 }
 
 interface SteeringRule {

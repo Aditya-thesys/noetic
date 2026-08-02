@@ -1,32 +1,32 @@
-# Memory Layer System
+# Context Layer System
 
-> **Module:** `@noetic-tools/memory` (source at `packages/memory/src/**`); the `MemoryLayer` contract is owned by `@noetic-tools/types` (`packages/types/src/types/memory.ts`, also at the `@noetic-tools/types/contract` subpath). Both are re-exported by `@noetic-tools/core`.
-> **Depends On:** `07-context-and-event-log` (ItemLog, Item — type import only), `10-observability` (MemoryTraceSpan, trace conventions), `04-spawn` (SpawnOpts — referenced in SpawnParams)
-> **Exports:** `MemoryLayer`, `MemoryHooks`, `MemoryScope`, `BudgetConfig`, `Slot`, `InitParams`, `InitResult`, `RecallParams`, `RecallResult`, `StoreParams`, `StoreResult`, `SpawnParams`, `SpawnResult`, `ReturnParams`, `ReturnResult`, `CompleteParams`, `DisposeParams`, `BeforeToolCallParams`, `BeforeToolCallResult`, `AfterModelCallParams`, `AfterModelCallResult`, `OnItemAppendParams`, `OnItemAppendResult`, `RerenderScope`, `ParentUpdateParams`, `ParentUpdateResult`, `ExecutionOutcome`, `ExecutionContext`, `ScopedStorage`, `StorageAdapter`, `ProjectionPolicy`, `LayerTimeouts`, `LayerProvides`, `LayerDataDecl`, `LayerFunctionDecl`, `MemoryConfig`, `InferMemory`, `InferMemoryShape`, `layerData`, `layerFn`, `memory`, `storageGetMany`
+> **Module:** `@noetic-tools/context` (source at `packages/context/src/**`); the `ContextLayer` contract is owned by `@noetic-tools/types` (`packages/types/src/types/context-layer.ts`, also at the `@noetic-tools/types/contract` subpath). Both are re-exported by `@noetic-tools/core`.
+> **Depends On:** `07-context-and-event-log` (ItemLog, Item — type import only), `10-observability` (LayerTraceSpan, trace conventions), `04-spawn` (SpawnOpts — referenced in SpawnParams)
+> **Exports:** `ContextLayer`, `ContextLayerHooks`, `ContextScope`, `BudgetConfig`, `Slot`, `InitParams`, `InitResult`, `RecallParams`, `RecallResult`, `StoreParams`, `StoreResult`, `SpawnParams`, `SpawnResult`, `ReturnParams`, `ReturnResult`, `CompleteParams`, `DisposeParams`, `BeforeToolCallParams`, `BeforeToolCallResult`, `AfterModelCallParams`, `AfterModelCallResult`, `OnItemAppendParams`, `OnItemAppendResult`, `RerenderScope`, `ParentUpdateParams`, `ParentUpdateResult`, `ExecutionOutcome`, `ExecutionContext`, `ScopedStorage`, `StorageAdapter`, `ProjectionPolicy`, `LayerTimeouts`, `LayerProvides`, `LayerDataDecl`, `LayerFunctionDecl`, `ContextConfig`, `InferContext`, `InferContextShape`, `layerData`, `layerFn`, `context`, `storageGetMany`
 
 ## Module Boundary
 
-The memory layer system lives in `@noetic-tools/memory` (`packages/memory/src/**`), built on the dependency-free `@noetic-tools/types` foundation. It has a strict import boundary so that consumers who only use the memory contract (custom layer authors) can tree-shake the interpreter and runtime code out of their bundle.
+The context layer system lives in `@noetic-tools/context` (`packages/context/src/**`), built on the dependency-free `@noetic-tools/types` foundation. It has a strict import boundary so that consumers who only use the context contract (custom layer authors) can tree-shake the interpreter and runtime code out of their bundle.
 
-| Owned by `@noetic-tools/types` | Lives in `@noetic-tools/memory` |
+| Owned by `@noetic-tools/types` | Lives in `@noetic-tools/context` |
 |---|---|
-| `MemoryLayer` interface and all hook types | Layer lifecycle orchestration (`initLayers`, `recallLayers`, etc.) |
-| `MemoryScope`, `ScopedStorage`, `StorageAdapter` | Projector (View assembly algorithm) in `projector.ts` |
+| `ContextLayer` interface and all hook types | Layer lifecycle orchestration (`initLayers`, `recallLayers`, etc.) |
+| `ContextScope`, `ScopedStorage`, `StorageAdapter` | Projector (View assembly algorithm) in `projector.ts` |
 | `BudgetConfig`, `Slot` | budget algorithm; `allocateBudgets` in `budget.ts` |
-| `ExecutionContext` (memory-facing read-only view) | built-in layer factories under `memory/layers/` |
+| `ExecutionContext` (layer-facing read-only view) | built-in layer factories under `context/layers/` |
 | `ProjectionPolicy` | Projector implementation in `projector.ts` |
 
-`Context` (the full execution object) lives in `@noetic-tools/core`'s `runtime/`; the `contextToExecCtx` mapping (Context → ExecutionContext) bridges core to the memory contract.
+`Context` (the full execution object) lives in `@noetic-tools/core`'s `runtime/`; the `contextToExecCtx` mapping (Context → ExecutionContext) bridges core to the context contract.
 
-**Boundary rule:** `@noetic-tools/memory` depends only on `@noetic-tools/types` and MUST NOT import from `@noetic-tools/core`. Pure helpers needed by both sides (`frameworkCast`, `createMessage`, `estimateTokens`, `isAssistantMessage`, `isUserMessage`, `isOutputText`) live in `@noetic-tools/types`. This keeps the memory package tree-shakable from the interpreter/runtime graph; importing a memory layer factory does not pull in `ContextImpl`.
+**Boundary rule:** `@noetic-tools/context` depends only on `@noetic-tools/types` and MUST NOT import from `@noetic-tools/core`. Pure helpers needed by both sides (`frameworkCast`, `createMessage`, `estimateTokens`, `isAssistantMessage`, `isUserMessage`, `isOutputText`) live in `@noetic-tools/types`. This keeps the context package tree-shakable from the interpreter/runtime graph; importing a context layer factory does not pull in `ContextImpl`.
 
-**Custom layer authors** import from `@noetic-tools/memory` (or, equivalently, from `@noetic-tools/core`, which re-exports it). Their bundle contains only the memory contract, the layer factories they use, and the shared `@noetic-tools/types` helpers — not the interpreter or runtime.
+**Custom layer authors** import from `@noetic-tools/context` (or, equivalently, from `@noetic-tools/core`, which re-exports it). Their bundle contains only the context contract, the layer factories they use, and the shared `@noetic-tools/types` helpers — not the interpreter or runtime.
 
 ---
 
 ## Overview
 
-A `MemoryLayer` is a plugin that participates in the agent execution lifecycle to recall context before LLM calls and persist information after them. Memory layers are the sole extension point for injecting non-conversation content into the View (the assembled item array sent to the model).
+A `ContextLayer` is a plugin that participates in the agent execution lifecycle to recall context before LLM calls and persist information after them. Context layers are the sole extension point for injecting non-conversation content into the View (the assembled item array sent to the model).
 
 Normative language uses **MUST**, **SHOULD**, and **MAY** per RFC 2119.
 
@@ -38,11 +38,11 @@ The layer system is loosely inspired by reactive programming — not in the form
 
 **Context is the result of all layers converging — it is not itself a layer.** You define layers; the agent harness converges them. Their convergence is the context. Context is never exposed as an input, never passed into a layer hook, and never something you construct directly. It is the output.
 
-**Memory is a type of layer, not a separate system.** "Memory" (facts recalled from storage) and "context injection" (information injected for this turn) are both expressed as layers with the same hook interface. The mechanism is identical; the purpose differs. The `slot` number determines where in the converged result each layer's contribution appears.
+**Recall is a type of layer, not a separate system.** Long-term recall (facts fetched from storage) and "context injection" (information injected for this turn) are both expressed as layers with the same hook interface. The mechanism is identical; the purpose differs. The `slot` number determines where in the converged result each layer's contribution appears.
 
 **Each layer is one of two things** (or both):
 - A **window section** — a portion of the context budget reserved for specific content (skills, reminders, entity facts)
-- A **map/reduce** over prior information — transforming raw history or storage into a condensed, relevant form (summarization layers, RAG layers, episodic memory)
+- A **map/reduce** over prior information — transforming raw history or storage into a condensed, relevant form (summarization layers, RAG layers, episodic context)
 
 **Context is scoped, not global.** LLM steps can share a converged context, operate in their own, or run in a child context forked from a parent via `spawn`. There is no ambient global context. Forked children are not fully isolated — they can receive updates from the parent context during their execution, and layers control whether and how those updates are incorporated.
 
@@ -56,16 +56,16 @@ Context can be explicitly marked stale, causing the next request to block until 
 
 ---
 
-## The `MemoryLayer` Interface
+## The `ContextLayer` Interface
 
 ```typescript
-interface MemoryLayer<TState = unknown> {
+interface ContextLayer<TState = unknown> {
   id: string;
   name?: string;
   slot: number;
-  scope: MemoryScope;
+  scope: ContextScope;
   budget?: BudgetConfig;
-  hooks: MemoryHooks<TState>;
+  hooks: ContextLayerHooks<TState>;
   timeouts?: Partial<LayerTimeouts>;
   /**
    * What to do when this layer's `init` hook throws.
@@ -84,7 +84,7 @@ interface MemoryLayer<TState = unknown> {
   rerenderTiming?: 'immediate' | 'batched';
 }
 
-type MemoryScope =
+type ContextScope =
   | 'thread'
   | 'resource'
   | 'global'
@@ -121,7 +121,7 @@ The agent harness sorts layers by slot ascending. Ties broken by array index (st
 ## Lifecycle Hooks
 
 ```typescript
-interface MemoryHooks<TState = unknown> {
+interface ContextLayerHooks<TState = unknown> {
   init?:            (params: InitParams)                         => Promise<InitResult<TState>>;
   recall?:          (params: RecallParams<TState>)               => Promise<RecallResult<TState> | string | null>;
   store?:           (params: StoreParams<TState>)                => Promise<StoreResult<TState> | void>;
@@ -387,7 +387,7 @@ ALL layer-state writes to non-`'execution'` scopes are durably mirrored to the l
 
 ## Budget Allocation
 
-There is a single allocator, `allocateBudgets` (in `memory/budget.ts`). It splits the recall budget derived from the resolved `ProjectionPolicy` across layers, leaving a reserve for conversation history. The naive per-layer ceiling is gone.
+There is a single allocator, `allocateBudgets` (in `context/budget.ts`). It splits the recall budget derived from the resolved `ProjectionPolicy` across layers, leaving a reserve for conversation history. The naive per-layer ceiling is gone.
 
 ### Policy Resolution
 
@@ -411,7 +411,7 @@ const DEFAULT_PROJECTION: ProjectionPolicy = {
 
 ```typescript
 function allocateBudgets(opts: {
-  layers: MemoryLayer[];
+  layers: ContextLayer[];
   totalBudget: number;       // policy.tokenBudget
   systemPromptTokens: number;
   responseReserve: number;   // policy.responseReserve
@@ -477,7 +477,7 @@ An `onItemAppend` hook MAY set `rerender: true` to request that affected layers 
 ### Scope Key Resolution
 
 ```typescript
-function resolveScopeKey(scope: MemoryScope, ctx: ExecutionContext): string {
+function resolveScopeKey(scope: ContextScope, ctx: ExecutionContext): string {
   switch (scope) {
     case 'thread':    return ctx.threadId;
     case 'resource':  return ctx.resourceId ?? ctx.threadId;
@@ -511,7 +511,7 @@ To read a different scope, declare the broader scope. No escape hatches.
 
 ## Layer Provides
 
-A memory layer MAY declare a `provides` map exposing typed data projections and callable functions to the rest of the agent. This gives code steps structured access to layer state without reaching into layer internals, and gives LLM steps automatic tool access to layer capabilities.
+A context layer MAY declare a `provides` map exposing typed data projections and callable functions to the rest of the agent. This gives code steps structured access to layer state without reaching into layer internals, and gives LLM steps automatic tool access to layer capabilities.
 
 ### Declaration Types
 
@@ -553,7 +553,7 @@ The `description` is used as the tool description when exposed to LLMs. The `inp
 A mapped type that produces a flat access interface from a layer's `provides` declaration:
 
 ```typescript
-type LayerHandle<T extends MemoryLayer> = T extends { provides: infer P }
+type LayerHandle<T extends ContextLayer> = T extends { provides: infer P }
   ? {
       [K in keyof P]: P[K] extends LayerDataDecl<infer D, unknown>
         ? D
@@ -568,14 +568,14 @@ Data entries become synchronous property reads (via getter). Function entries be
 
 ### Accessing Provides from Code Steps
 
-Code steps access a layer's provides via `ctx.memory['layerId']`, where the key is the layer's `id` string:
+Code steps access a layer's provides via `ctx.context['layerId']`, where the key is the layer's `id` string:
 
 ```typescript
-const value = ctx.memory['layerId'].someData;              // synchronous read
-const result = await ctx.memory['layerId'].someFunction({ query: 'test' });  // async call
+const value = ctx.context['layerId'].someData;              // synchronous read
+const result = await ctx.context['layerId'].someFunction({ query: 'test' });  // async call
 ```
 
-Layers without `provides` produce an empty `{}` entry in `ctx.memory`.
+Layers without `provides` produce an empty `{}` entry in `ctx.context`.
 
 ### Automatic LLM Tool Injection
 
@@ -602,41 +602,41 @@ function layerFn<TInput, TOutput, TState>(opts: {
 }): LayerFunctionDecl<TInput, TOutput, TState>;
 ```
 
-### Type-Safe Memory Access
+### Type-Safe Context Access
 
-The `memory()` builder wraps a layer tuple in a `MemoryConfig` that preserves individual layer types for compile-time inference:
+The `context()` builder wraps a layer tuple in a `ContextConfig` that preserves individual layer types for compile-time inference:
 
 ```typescript
-function memory<const T extends readonly MemoryLayer[]>(layers: T): MemoryConfig<T>;
+function context<const T extends readonly ContextLayer[]>(layers: T): ContextConfig<T>;
 
-interface MemoryConfig<TLayers extends readonly MemoryLayer[] = readonly MemoryLayer[]> {
+interface ContextConfig<TLayers extends readonly ContextLayer[] = readonly ContextLayer[]> {
   readonly layers: TLayers;
-  readonly _shape: InferMemoryShape<TLayers>;
+  readonly _shape: InferContextShape<TLayers>;
 }
 ```
 
-`InferMemory<T>` extracts the typed memory shape from a config (analogous to `z.infer<>` for Zod):
+`InferContext<T>` extracts the typed context shape from a config (analogous to `z.infer<>` for Zod):
 
 ```typescript
-type InferMemory<T extends MemoryConfig> = T['_shape'];
+type InferContext<T extends ContextConfig> = T['_shape'];
 ```
 
-`TMemory` is the first generic parameter on `Step` and `Context`, enabling end-to-end type safety:
+`TContext` is the first generic parameter on `Step` and `Context`, enabling end-to-end type safety:
 
 ```typescript
-const mem = memory([workingMemory(), counterLayer()]);
-type Mem = InferMemory<typeof mem>;
+const mem = context([workingMemoryContext(), counterLayer()]);
+type Mem = InferContext<typeof mem>;
 
 step.run<Mem>({
   id: 'work',
   execute: async (input, ctx) => {
-    ctx.memory['working-memory'].snapshot;  // typed
-    await ctx.memory.counter.increment({ amount: 1 });  // typed
+    ctx.context['working-context'].snapshot;  // typed
+    await ctx.context.counter.increment({ amount: 1 });  // typed
   },
 });
 ```
 
-Layer factories MUST use `satisfies MemoryLayer<TState>` (not a return type annotation) and `as const` on the `id` field to preserve literal types for inference.
+Layer factories MUST use `satisfies ContextLayer<TState>` (not a return type annotation) and `as const` on the `id` field to preserve literal types for inference.
 
 ---
 
@@ -646,7 +646,7 @@ Layer factories MUST use `satisfies MemoryLayer<TState>` (not a return type anno
 
 A potential optimization: allow a layer to declare interest in a specific subset of a parent scope rather than the whole thing. A specialist layer — one that cares only about user preferences or an active task list — could subscribe only to those keys and avoid receiving or processing unrelated parent context changes.
 
-This would require extending `MemoryScope` with a selector variant (e.g. key patterns or glob matching), adding filtering logic to `onParentUpdate` dispatch, and defining access-control semantics for `ScopedStorage`. The tradeoffs (pattern-matching cost per `store()`, complexity of the access model) need evaluation before committing to a design. Not scheduled.
+This would require extending `ContextScope` with a selector variant (e.g. key patterns or glob matching), adding filtering logic to `onParentUpdate` dispatch, and defining access-control semantics for `ScopedStorage`. The tradeoffs (pattern-matching cost per `store()`, complexity of the access model) need evaluation before committing to a design. Not scheduled.
 
 ---
 
@@ -701,9 +701,9 @@ Layers own their migration. Recommended: versioned state with explicit migration
 
 ---
 
-## `ExecutionContext` (Memory-Specific)
+## `ExecutionContext` (Layer-Specific)
 
-The narrow, read-only context that memory layer hooks receive:
+The narrow, read-only context that context layer hooks receive:
 
 ```typescript
 interface ExecutionContext {
@@ -724,7 +724,7 @@ interface ExecutionContext {
 }
 ```
 
-`ExecutionContext` includes `readonly fs: FsAdapter` so memory layers can perform filesystem operations (e.g., reading config files, persisting state to disk) through the harness's configured adapter.
+`ExecutionContext` includes `readonly fs: FsAdapter` so context layers can perform filesystem operations (e.g., reading config files, persisting state to disk) through the harness's configured adapter.
 
 `readLayerState<T>(layerId)` returns a sibling layer's current state by its `layer.id`, or `undefined` if no such state exists yet. This enables cross-layer coordination (e.g., a reminder layer reading a planning layer's mode flag). Layers MUST treat the returned value as read-only — mutations are not persisted and observability is undefined.
 
@@ -770,9 +770,9 @@ Given a `ProjectionPolicy`, `assembleView` holds the assembled view to a hard bu
 
 Without a `policy`, the inputs are concatenated as-is (optionally sliding the history window by `windowSize`).
 
-### Conversation History is Not a Memory Layer
+### Conversation History is Not a Context Layer
 
-The ItemLog's rendering is handled by the Projector natively. Memory layers get budgets FROM a pool. Conversation history gets the REMAINDER. This asymmetry is fundamental.
+The ItemLog's rendering is handled by the Projector natively. Context layers get budgets FROM a pool. Conversation history gets the REMAINDER. This asymmetry is fundamental.
 
 ---
 
@@ -814,14 +814,14 @@ A layer disabled via `onInitError: 'disable'` is marked with an explicit disable
 
 ---
 
-## Memory Across Spawn Boundaries (see also `04-spawn`)
+## Context Across Spawn Boundaries (see also `04-spawn`)
 
 | Layer Scope | Spawn Behavior                                                                       |
 |-------------|--------------------------------------------------------------------------------------|
 | `execution` | `onSpawn` MUST be provided for child access. No automatic sharing.                   |
 | `thread`    | Same thread → shared via storage. Different thread → isolated.                       |
-| `resource`  | Shared via storage regardless of thread. `onSpawn` controls in-memory state.         |
-| `global`    | Shared via storage. `onSpawn` controls in-memory state.                              |
+| `resource`  | Shared via storage regardless of thread. `onSpawn` controls in-layer state.         |
+| `global`    | Shared via storage. `onSpawn` controls in-layer state.                              |
 
 Child state is a **deep clone**. Mutations in child do NOT affect parent. State crosses the boundary only via `onReturn`.
 
@@ -833,9 +833,9 @@ Validated at agent construction time (not first execution):
 
 | Rule                                    | Error                    |
 |-----------------------------------------|--------------------------|
-| Duplicate `id` in memory array          | `DuplicateLayerIdError`  |
+| Duplicate `id` in layer array          | `DuplicateLayerIdError`  |
 | `slot` is not a finite number           | `InvalidSlotError`       |
-| `scope` is not a valid `MemoryScope`    | `InvalidScopeError`      |
+| `scope` is not a valid `ContextScope`    | `InvalidScopeError`      |
 | `budget.min > budget.max`               | `InvalidBudgetError`     |
 | `budget.min < 0`                        | `InvalidBudgetError`     |
 | Layer has no hooks at all               | `EmptyLayerError` (warn) |

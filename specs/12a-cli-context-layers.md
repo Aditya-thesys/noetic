@@ -1,9 +1,9 @@
-# 12a — CLI-Specific Memory Layers
+# 12a — CLI-Specific Context Layers
 
-> **Depends On:** `11-memory-layer-system` (Slot, MemoryLayer, hooks), `12-builtin-memory-layers` (base built-ins)
+> **Depends On:** `11-context-layer-system` (Slot, ContextLayer, hooks), `12-builtin-memory-layers` (base built-ins)
 > **Status:** Stable
 
-This spec documents memory layers shipped with `@noetic-tools/cli` that are not part of the core framework. They compose on top of the base layers defined in `12-builtin-memory-layers.md`.
+This spec documents context layers shipped with `@noetic-tools/cli` that are not part of the core framework. They compose on top of the base layers defined in `12-builtin-context-layers.md`.
 
 ---
 
@@ -18,7 +18,7 @@ Injects `<system-reminder>`-wrapped developer messages into the conversation bas
 ### Factory
 
 ```typescript
-reminderLayer(opts: { registry: ReminderRegistry }): MemoryLayer<ReminderLayerState>
+reminderLayer(opts: { registry: ReminderRegistry }): ContextLayer<ReminderLayerState>
 ```
 
 ### State
@@ -58,7 +58,7 @@ Throttling: a trigger fires only when `assistantTurnCount - firedHistory[id].ass
 | id | timing | fires when |
 |----|--------|-----------|
 | `agent-md-loaded` | recall | turn 0, if `agent-md` layer has sources |
-| `plan-mode-still-active` | recall | every 8 turns while `plan-memory.session.mode === 'planning'` |
+| `plan-mode-still-active` | recall | every 8 turns while `plan.session.mode === 'planning'` |
 | `long-conversation` | recall | every 40 assistant turns |
 | `error-recovery` | immediate | after 3 consecutive error-looking tool outputs |
 | `consecutive-bash` | recall | after 3 Bash calls in a row |
@@ -84,7 +84,7 @@ Surfaces the merged output of the AGENT.md + rules loader (`packages/cli/src/con
 ### Factory
 
 ```typescript
-agentMdLayer(opts: { loader: () => Promise<AgentInstructionResult> }): MemoryLayer<AgentInstructionResult>
+agentMdLayer(opts: { loader: () => Promise<AgentInstructionResult> }): ContextLayer<AgentInstructionResult>
 ```
 
 ### Rendered format
@@ -144,10 +144,10 @@ The reminder layer and agent-md layer are registered in `packages/cli/src/harnes
 | Slot | Layer |
 |------|-------|
 | 80 (REMINDER) | `reminder` |
-| 90 (STEERING) | `plan-memory` |
-| 100 (WORKING_MEMORY) | `working-memory` |
+| 90 (STEERING) | `plan` |
+| 100 (WORKING_MEMORY) | `working-context` |
 | 195 | `agent-md` |
-| 200 (OBSERVATIONS) | `observational-memory` |
-| 250+ | `file-reference`, `durable-task-state`, tool-memory layers, plugin layers, `skills` |
+| 200 (OBSERVATIONS) | `observational-context` |
+| 250+ | `file-reference`, `durable-task-state`, tool-context layers, plugin layers, `skills` |
 
 The reminder layer fires before steering so its developer messages are visible in the turn assembly; the agent-md layer sits just ahead of observations so project/user instructions establish context before runtime observations.

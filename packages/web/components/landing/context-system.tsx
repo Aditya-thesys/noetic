@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { LayerTile } from '@/components/landing/layer-tile';
 import { LegendRow } from '@/components/landing/legend-row';
-import { MemoryIsometricSvg } from '@/components/landing/svgs/memory-isometric';
+import { ContextIsometricSvg } from '@/components/landing/svgs/context-isometric';
 
 const LAYERS = [
   {
@@ -12,7 +12,7 @@ const LAYERS = [
     color: 'var(--color-tui-cyan)',
   },
   {
-    name: 'Observational Memory',
+    name: 'Observational Context',
     description: 'Auto-extracted facts from the conversation',
     color: 'var(--color-tui-cyan)',
   },
@@ -37,17 +37,17 @@ const LAYERS = [
     color: 'var(--color-tui-green)',
   },
   {
-    name: 'Tool Memory',
+    name: 'Tool Context',
     description: 'Recall of prior tool calls and results',
     color: 'var(--color-tui-green)',
   },
   {
-    name: 'Temporal Memory',
+    name: 'Temporal Context',
     description: 'Time-stamped fact extraction and recall',
     color: 'var(--color-tui-green)',
   },
   {
-    name: 'Plan Memory',
+    name: 'Plan Context',
     description: 'Task tree and execution state',
     color: 'var(--color-tui-amber)',
   },
@@ -78,7 +78,7 @@ const LEGEND = [
   },
 ] as const;
 
-export function MemorySystem(): ReactNode {
+export function ContextSystem(): ReactNode {
   return (
     <section
       style={{
@@ -93,7 +93,7 @@ export function MemorySystem(): ReactNode {
         }}
       >
         {/* Copy - appears first in DOM for mobile, reordered on desktop */}
-        <div className="memory-content">
+        <div className="context-content">
           <span
             style={{
               fontSize: '13px',
@@ -112,7 +112,7 @@ export function MemorySystem(): ReactNode {
               letterSpacing: '-0.01em',
             }}
           >
-            Unparalleled memory management
+            Unparalleled context management
           </h2>
           <p
             style={{
@@ -139,15 +139,15 @@ export function MemorySystem(): ReactNode {
         </div>
 
         {/* SVG - appears second in DOM for mobile, reordered on desktop */}
-        <div className="memory-visual">
-          <MemoryIsometricSvg />
+        <div className="context-visual">
+          <ContextIsometricSvg />
         </div>
       </div>
 
       <LegendRow items={LEGEND} />
 
       <div
-        className="memory-layers-grid"
+        className="context-layers-grid"
         style={{
           display: 'grid',
           gap: '4px',

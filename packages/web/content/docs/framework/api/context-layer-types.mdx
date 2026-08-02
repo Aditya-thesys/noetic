@@ -1,20 +1,20 @@
 ---
-title: Memory Types
-description: Type definitions for memory layers, hooks, storage adapters, and projection policies in Noetic.
+title: Context Layer Types
+description: Type definitions for context layers, hooks, storage adapters, and projection policies in Noetic.
 ---
 
-## MemoryLayer
+## ContextLayer
 
-The core memory layer interface.
+The core context layer interface.
 
 ```ts
-declare interface MemoryLayerShape<TState = unknown> {
+declare interface ContextLayerShape<TState = unknown> {
   id: string;
   name?: string;
   slot: number;
-  scope: MemoryScope;
+  scope: ContextScope;
   budget?: BudgetConfig;
-  hooks: MemoryHooks<TState>;
+  hooks: ContextLayerHooks<TState>;
   timeouts?: Partial<LayerTimeouts>;
   onInitError?: 'throw' | 'disable';
   recallMode?: 'atomic' | 'eventual';
@@ -29,20 +29,20 @@ declare interface MemoryLayerShape<TState = unknown> {
 | `id` | `string` | yes | Unique layer identifier. |
 | `name` | `string` | no | Human-readable name for debugging and trace output. |
 | `slot` | `number` | yes | Ordering slot (lower = recalled first). Use the [`Slot`](#slot-constants) constants for well-known positions. |
-| `scope` | `MemoryScope` | yes | Persistence boundary. |
+| `scope` | `ContextScope` | yes | Persistence boundary. |
 | `budget` | `BudgetConfig` | no | Token budget allocation: a fixed number, a `{ min, max }` range, or `'auto'`. |
-| `hooks` | `MemoryHooks<TState>` | yes | Lifecycle callbacks. |
+| `hooks` | `ContextLayerHooks<TState>` | yes | Lifecycle callbacks. |
 | `timeouts` | `Partial<LayerTimeouts>` | no | Per-hook timeout overrides (ms). |
 | `onInitError` | `'throw' \| 'disable'` | no | What to do when `init` throws. `'throw'` (default) surfaces the error and aborts the execution; `'disable'` logs a diagnostic and runs the execution without this layer. Opt into `'disable'` only for non-critical layers. |
 | `recallMode` | `'atomic' \| 'eventual'` | no | Whether `recall()` blocks the model call. `'atomic'` (default) runs in the hot path; `'eventual'` serves recall from cache and refreshes after `store()`, so the next turn sees the update. A harness configured with `forceAtomicRecall` treats every layer as atomic. |
-| `provides` | `LayerProvides` | no | Typed data and function declarations exposed on `ctx.memory['layerId']`. Function entries are also auto-injected as LLM tools. |
-| `itemSchemas` | `Pick<ItemSchemaExtensions, 'developerMessages' \| 'items'>` | no | Optional item schemas contributed by this layer, primarily for developer-role memory items. |
+| `provides` | `LayerProvides` | no | Typed data and function declarations exposed on `ctx.context['layerId']`. Function entries are also auto-injected as LLM tools. |
+| `itemSchemas` | `Pick<ItemSchemaExtensions, 'developerMessages' \| 'items'>` | no | Optional item schemas contributed by this layer, primarily for developer-role context items. |
 | `rerenderTiming` | `'immediate' \| 'batched'` | no | Default re-render timing when `onItemAppend` requests a re-render. |
 
-## MemoryScope
+## ContextScope
 
 ```ts validate=none
-type MemoryScope = 'thread' | 'resource' | 'global' | 'execution';
+type ContextScope = 'thread' | 'resource' | 'global' | 'execution';
 ```
 
 ## BudgetConfig
@@ -74,10 +74,10 @@ const SlotShape = {
 
 The runtime exports the `Slot` constant from `@noetic-tools/core` with these values; pass any of them as a layer's `slot` field to position it consistently with built-in layers.
 
-## MemoryHooks
+## ContextLayerHooks
 
 ```ts validate=none
-interface MemoryHooks<TState = unknown> {
+interface ContextLayerHooks<TState = unknown> {
   init?: (params: InitParams) => Promise<InitResult<TState>>;
   recall?: (params: RecallParams<TState>) => Promise<RecallResult<TState> | string | null>;
   store?: (params: StoreParams<TState>) => Promise<StoreResult<TState> | undefined>;
@@ -201,7 +201,7 @@ type ExecutionOutcome = 'success' | 'failure' | 'aborted';
 
 ## ExecutionContext
 
-Context available to memory layer hooks (different from the step `Context`).
+Context available to context layer hooks (different from the step `Context`).
 
 ```ts validate=none
 interface ExecutionContext {
@@ -214,7 +214,7 @@ interface ExecutionContext {
   cost: number;
   fs: FsAdapter;
   shell: ShellAdapter;
-  callModel?: (request: MemoryCallModelRequest) => Promise<LLMResponse>;
+  callModel?: (request: LayerCallModelRequest) => Promise<LLMResponse>;
   tokenize(text: string): number;
   trace: {
     setAttribute(key: string, value: string | number | boolean): void;
@@ -224,7 +224,7 @@ interface ExecutionContext {
 }
 ```
 
-`fs` is the `FsAdapter` from `ctx.harness.fs`, giving memory layer hooks access to the same filesystem backend as tools and skill discovery (real, in-memory, or remote). `shell` is the corresponding `ShellAdapter`. `callModel` is the minimal model-call surface (`{ model, items, instructions? }`) — present only when the harness has an LLM provider configured, so LLM-backed layers must handle its absence. `readLayerState` snapshots a sibling layer's state by its `layer.id`.
+`fs` is the `FsAdapter` from `ctx.harness.fs`, giving context layer hooks access to the same filesystem backend as tools and skill discovery (real, in-memory, or remote). `shell` is the corresponding `ShellAdapter`. `callModel` is the minimal model-call surface (`{ model, items, instructions? }`) — present only when the harness has an LLM provider configured, so LLM-backed layers must handle its absence. `readLayerState` snapshots a sibling layer's state by its `layer.id`.
 
 ## LayerTimeouts
 
@@ -295,7 +295,7 @@ interface ScopedStorage {
 
 ## LayerStateStore
 
-In-memory layer-state store with centralized durable write-through. Every `set()` for a registered (execution, layer) pair is asynchronously mirrored to the layer's `ScopedStorage` — state written by `provides` functions, lifecycle hooks, or `store()` all persists the same way. Available from `@noetic-tools/core/unstable`.
+In-context layer-state store with centralized durable write-through. Every `set()` for a registered (execution, layer) pair is asynchronously mirrored to the layer's `ScopedStorage` — state written by `provides` functions, lifecycle hooks, or `store()` all persists the same way. Available from `@noetic-tools/core/unstable`.
 
 ```ts validate=none
 interface LayerStateStore {
@@ -325,12 +325,12 @@ interface LayerStateStore {
 
 Writes are coalesced per key (latest wins, one write in flight) and mirror failures never throw — they surface only through `diagnostic`.
 
-## MemoryTraceSpan
+## LayerTraceSpan
 
-Observability data for a single memory hook execution.
+Observability data for a single layer hook execution.
 
 ```ts validate=none
-interface MemoryTraceSpan {
+interface LayerTraceSpan {
   layerId: string;
   hook: 'init' | 'recall' | 'store' | 'onSpawn' | 'onReturn' | 'onComplete' | 'dispose';
   durationMs: number;
@@ -341,39 +341,39 @@ interface MemoryTraceSpan {
 }
 ```
 
-## ContextMemory
+## ContextData
 
-The default memory shape used when no typed memory config is provided.
+The default context shape used when no typed context config is provided.
 
 ```ts validate=none
-type ContextMemory = Readonly<Record<string, Record<string, unknown>>>;
+type ContextData = Readonly<Record<string, Record<string, unknown>>>;
 ```
 
-## MemoryConfig
+## ContextConfig
 
-A typed memory configuration that carries a phantom `_shape` for compile-time memory access. Created via the `memory()` builder.
+A typed context configuration that carries a phantom `_shape` for compile-time context access. Created via the `context()` builder.
 
 ```ts validate=none
-interface MemoryConfig<TLayers extends MemoryLayer[] = MemoryLayer[]> {
+interface ContextConfig<TLayers extends ContextLayer[] = ContextLayer[]> {
   layers: TLayers;
-  _shape: InferMemoryShape<TLayers>;
+  _shape: InferContextShape<TLayers>;
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `layers` | `TLayers` | Array of memory layers |
-| `_shape` | `InferMemoryShape<TLayers>` | Phantom field for compile-time shape inference (never set at runtime) |
+| `layers` | `TLayers` | Array of context layers |
+| `_shape` | `InferContextShape<TLayers>` | Phantom field for compile-time shape inference (never set at runtime) |
 
-## InferMemory
+## InferContext
 
-Extracts the memory shape type from a `MemoryConfig`.
+Extracts the context shape type from a `ContextConfig`.
 
 ```ts validate=none
-type InferMemory<T extends { readonly _shape: unknown }> = T['_shape'];
+type InferContext<T extends { readonly _shape: unknown }> = T['_shape'];
 ```
 
-## InferMemoryShape
+## InferContextShape
 
 A mapped type that collects each layer's `provides` declarations into a record keyed by layer `id`. Each key maps to the resolved data/function types declared by that layer.
 
@@ -383,7 +383,7 @@ A mapped type that collects each layer's `provides` declarations into a record k
 type LayerProvides = Record<string, LayerDataDecl | LayerFunctionDecl>;
 ```
 
-A record of named declarations that a layer exposes on `ctx.memory[layerId]`.
+A record of named declarations that a layer exposes on `ctx.context[layerId]`.
 
 ## LayerDataDecl
 
@@ -446,12 +446,12 @@ function layerFn<TInput, TOutput, TState>(opts: {
 }): LayerFunctionDecl<TInput, TOutput, TState>;
 ```
 
-Creates a `LayerFunctionDecl` that exposes a callable function on the memory object. `execute` returns `{ result, state? }`; include `state` to persist an updated layer state.
+Creates a `LayerFunctionDecl` that exposes a callable function on the context object. `execute` returns `{ result, state? }`; include `state` to persist an updated layer state.
 
-### memory
+### context
 
 ```ts validate=none
-function memory<const T extends readonly MemoryLayer[]>(layers: T): MemoryConfig<T>;
+function context<const T extends readonly ContextLayer[]>(layers: T): ContextConfig<T>;
 ```
 
-Collects an **array** of layers into a `MemoryConfig` with inferred `_shape` — e.g. `memory([workingMemory(), planMemory()])`. Pass the result to `StepSpawn.memory` or `AgentConfig` to get typed `ctx.memory` access.
+Collects an **array** of layers into a `ContextConfig` with inferred `_shape` — e.g. `context([workingMemoryContext(), planContext()])`. Pass the result to `StepSpawn.context` or `AgentConfig` to get typed `ctx.context` access.

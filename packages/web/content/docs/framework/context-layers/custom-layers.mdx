@@ -1,11 +1,11 @@
 ---
-title: Custom Memory Layers
-description: How to build your own memory layer by implementing MemoryHooks, choosing a slot and scope, and configuring budgets and timeouts.
+title: Custom Context Layers
+description: How to build your own context layer by implementing ContextLayerHooks, choosing a slot and scope, and configuring budgets and timeouts.
 ---
 
 ## Overview
 
-Every built-in memory layer is just a `MemoryLayer` object. You can build your own by implementing the same interface. This guide walks through each decision point.
+Every built-in context layer is just a `ContextLayer` object. You can build your own by implementing the same interface. This guide walks through each decision point.
 
 ## Step 1: Define Your State Type
 
@@ -77,9 +77,9 @@ Implement only the hooks you need. All hooks are optional.
 
 ```ts validate=none
 import { createMessage } from '@noetic-tools/core';
-import type { MemoryLayer, MemoryHooks } from '@noetic-tools/core';
+import type { ContextLayer, ContextLayerHooks } from '@noetic-tools/core';
 
-function myCustomLayer(): MemoryLayer<MyLayerState> {
+function myCustomLayer(): ContextLayer<MyLayerState> {
   return {
     id: 'my-custom-layer',
     name: 'My Custom Layer',
@@ -146,7 +146,7 @@ function myCustomLayer(): MemoryLayer<MyLayerState> {
 Beyond `recall`/`store`, two hooks let a layer shape what the model sees without touching storage:
 
 - **`onItemAppend`** runs when input items (user messages, tool outputs — never LLM responses) are about to be appended. Layers compose in slot order, each receiving the previous layer's output. Return the items to actually append: pass them through unchanged, transform them, return `[]` to drop them, or include extras to inject. The result may also carry an updated `state` and a `rerender: true` request (with optional `timing` and `scope`) to re-run recall mid-turn.
-- **`projectHistory`** runs once per LLM step to project (cap, summarize, redact) the history portion of the context window. It is read-side only — `itemLog` storage is never mutated. See [History Window](/docs/framework/memory/history-window) for a layer built entirely from this hook.
+- **`projectHistory`** runs once per LLM step to project (cap, summarize, redact) the history portion of the context window. It is read-side only — `itemLog` storage is never mutated. See [History Window](/docs/framework/context-layers/history-window) for a layer built entirely from this hook.
 
 ## Step 6: Set Timeouts (Optional)
 
@@ -167,21 +167,21 @@ Timeouts exist for every hook, including `beforeToolCall`, `afterModelCall`, `on
 
 Two top-level fields tune how the runtime treats your layer:
 
-- **`onInitError`** — what happens when `init` throws (or times out). The default `'throw'` aborts the execution: memory is load-bearing, and silently dropping a layer hides failures. Set `'disable'` only for genuinely non-critical layers; the runtime then logs a diagnostic and skips the layer's hooks for the run.
+- **`onInitError`** — what happens when `init` throws (or times out). The default `'throw'` aborts the execution: context is load-bearing, and silently dropping a layer hides failures. Set `'disable'` only for genuinely non-critical layers; the runtime then logs a diagnostic and skips the layer's hooks for the run.
 - **`recallMode`** — `'atomic'` (default) runs `recall()` in the hot path before every model call. Set `'eventual'` for expensive recalls that can tolerate staleness: recall is served from a cache that refreshes after `store()`, so the next turn sees the update and the model call is never blocked. A harness configured with `forceAtomicRecall` overrides this and treats every layer as atomic.
 
 ## Step 7: Register with the Agent
 
-Pass custom layers to a `react` pattern (or `spawn`'s `memory` option):
+Pass custom layers to a `react` pattern (or `spawn`'s `context` option):
 
 ```ts validate=none
 const agent = react({
   model: 'openai/gpt-4o',
   instructions: 'You are a helpful assistant.',
-  memory: [
-    workingMemory(),
+  context: [
+    workingMemoryContext(),
     myCustomLayer(),
-    observationalMemory(),
+    observationalContext(),
   ],
 });
 ```
@@ -265,14 +265,14 @@ State written by **any** path — `store()` hooks, `provides` functions, `onComp
 
 ## Step 8: Add a `provides` Map (Optional)
 
-The `provides` field exposes typed data and functions from your layer. Data entries are accessible in code steps via `ctx.memory['layerId'].prop`. Function entries are also automatically injected as LLM tools, namespaced as `layerId/fnName`.
+The `provides` field exposes typed data and functions from your layer. Data entries are accessible in code steps via `ctx.context['layerId'].prop`. Function entries are also automatically injected as LLM tools, namespaced as `layerId/fnName`.
 
 Use the `layerData()` and `layerFn()` builders:
 
 ```ts
 import { z } from 'zod';
 import { createMessage, layerData, layerFn } from '@noetic-tools/core';
-import type { MemoryLayer } from '@noetic-tools/core';
+import type { ContextLayer } from '@noetic-tools/core';
 
 interface MyLayerState {
   entries: string[];
@@ -320,37 +320,37 @@ function myCustomLayer() {
         };
       },
     },
-  } satisfies MemoryLayer<MyLayerState>;
+  } satisfies ContextLayer<MyLayerState>;
 }
 ```
 
-Note the `as const` on the `id` field and the `satisfies MemoryLayer<MyLayerState>` pattern. This preserves the literal `'my-custom-layer'` type so that `InferMemory` can map the layer ID to its provides shape at compile time.
+Note the `as const` on the `id` field and the `satisfies ContextLayer<MyLayerState>` pattern. This preserves the literal `'my-custom-layer'` type so that `InferContext` can map the layer ID to its provides shape at compile time.
 
-### Type-Safe Access with `memory()` and `InferMemory`
+### Type-Safe Access with `context()` and `InferContext`
 
-Wrap your layers in the `memory()` builder to get full type inference:
+Wrap your layers in the `context()` builder to get full type inference:
 
 ```ts validate=none
-import { memory, workingMemory, type InferMemory } from '@noetic-tools/core';
+import { context, workingMemoryContext, type InferContext } from '@noetic-tools/core';
 
-const mem = memory([workingMemory(), myCustomLayer()]);
-type Mem = InferMemory<typeof mem>;
+const mem = context([workingMemoryContext(), myCustomLayer()]);
+type Mem = InferContext<typeof mem>;
 
 // Mem is:
 // {
-//   'working-memory': { snapshot: WorkingMemoryState; update: (args: Record<string, unknown>) => Promise<void> };
+//   'working-context': { snapshot: WorkingMemoryContextState; update: (args: Record<string, unknown>) => Promise<void> };
 //   'my-custom-layer': { entryCount: number; addEntry: (args: { text: string }) => Promise<void> };
 // }
 ```
 
-In a `step.run`, access the typed memory:
+In a `step.run`, access the typed context:
 
 ```ts validate=none
 const myStep = step.run({
-  id: 'use-memory',
+  id: 'use-context',
   execute: async (input: string, ctx: Context<Mem>) => {
-    const count = ctx.memory['my-custom-layer'].entryCount;
-    await ctx.memory['my-custom-layer'].addEntry({ text: input });
+    const count = ctx.context['my-custom-layer'].entryCount;
+    await ctx.context['my-custom-layer'].addEntry({ text: input });
     return count;
   },
 });
@@ -362,4 +362,4 @@ Every `layerFn` in a layer's `provides` is automatically registered as an LLM to
 
 ## See Also
 
-- [Tool Memory](/docs/framework/memory/tool-memory) -- imperative state access via `toolCtx.memory` and function-call memory patterns
+- [Tool Context](/docs/framework/context-layers/tool-context) -- imperative state access via `toolCtx.context` and function-call state patterns

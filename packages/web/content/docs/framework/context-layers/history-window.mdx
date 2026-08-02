@@ -1,6 +1,6 @@
 ---
 title: History Window
-description: A read-side memory layer that caps the trailing items projected to the LLM without mutating storage.
+description: A read-side context layer that caps the trailing items projected to the LLM without mutating storage.
 ---
 
 ## Overview
@@ -15,11 +15,11 @@ description: A read-side memory layer that caps the trailing items projected to 
 ## Usage
 
 ```ts
-import { historyWindow, observationalMemory, workingMemory } from '@noetic-tools/core';
+import { historyWindow, observationalContext, workingMemoryContext } from '@noetic-tools/core';
 
-const memory = [
-  workingMemory(),
-  observationalMemory(),
+const layers = [
+  workingMemoryContext(),
+  observationalContext(),
   historyWindow({ maxItems: 40 }),
 ];
 ```
@@ -70,6 +70,6 @@ The CLI installs `historyWindow` only when `AgentConfig.history.maxItems` is set
 
   (`model`, `cwd`, `apiKey`, and `maxTurns` are required fields on `AgentConfig`.)
 
-- `/config` slash command → **Memory** tab → **History Window (items)**. Leave blank to disable.
+- `/config` slash command → **Context** tab → **History Window (items)**. Leave blank to disable.
 
 Spawned sub-agents (teammates) inherit the same cap by default.

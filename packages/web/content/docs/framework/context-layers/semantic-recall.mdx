@@ -1,25 +1,25 @@
 ---
 title: Semantic Recall
-description: Vector-indexed long-term memory for retrieving relevant past knowledge using embedding similarity search.
+description: Vector-indexed long-term recall for retrieving relevant past knowledge using embedding similarity search.
 ---
 
 ## Overview
 
-Semantic Recall is a memory layer designed for vector-indexed long-term storage. It stores items as embeddings and retrieves them by similarity to the current query, making it ideal for large knowledge bases, past interactions, or document retrieval.
+Semantic Recall is a context layer designed for vector-indexed long-term storage. It stores items as embeddings and retrieves them by similarity to the current query, making it ideal for large knowledge bases, past interactions, or document retrieval.
 
 - **Slot**: `400` (`Slot.SEMANTIC_RECALL`)
 - **Scope**: `global`
 
 ## Concept
 
-Unlike other memory layers that operate on structured state, Semantic Recall integrates with a vector store to perform approximate nearest-neighbor search. The `recall` hook embeds the current query and retrieves the most relevant items within the token budget. The `store` hook embeds new content and indexes it for future retrieval.
+Unlike other context layers that operate on structured state, Semantic Recall integrates with a vector store to perform approximate nearest-neighbor search. The `recall` hook embeds the current query and retrieves the most relevant items within the token budget. The `store` hook embeds new content and indexes it for future retrieval.
 
 ## Building a Semantic Recall Layer
 
-Noetic does not ship a built-in vector store. Instead, you implement the `MemoryHooks` interface with your preferred vector database. Here is the general shape:
+Noetic does not ship a built-in vector store. Instead, you implement the `ContextLayerHooks` interface with your preferred vector database. Here is the general shape:
 
 ```ts
-import type { MemoryLayer } from '@noetic-tools/core';
+import type { ContextLayer } from '@noetic-tools/core';
 import { Slot } from '@noetic-tools/core';
 
 interface VectorStore {
@@ -33,7 +33,7 @@ interface SemanticRecallConfig {
   topK?: number;
 }
 
-function semanticRecall(config: SemanticRecallConfig): MemoryLayer {
+function semanticRecall(config: SemanticRecallConfig): ContextLayer {
   return {
     id: 'semantic-recall',
     name: 'Semantic Recall',
@@ -107,5 +107,5 @@ You can plug in any vector database:
 
 ## Next Steps
 
-- [Custom Layers](/docs/framework/memory/custom-layers) -- full guide to building any memory layer
-- [Memory Layer System](/docs/framework/memory) -- how slots, scopes, and budgets work together
+- [Custom Layers](/docs/framework/context-layers/custom-layers) -- full guide to building any context layer
+- [Context Layer System](/docs/framework/context-layers) -- how slots, scopes, and budgets work together

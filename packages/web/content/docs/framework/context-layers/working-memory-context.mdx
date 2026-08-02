@@ -1,11 +1,11 @@
 ---
 title: Working Memory
-description: A scratchpad memory layer that persists structured or free-form notes across turns within a single execution.
+description: A scratchpad context layer that persists structured or free-form notes across turns within a single execution.
 ---
 
 ## Overview
 
-Working Memory is the simplest built-in memory layer. It acts as a scratchpad that the agent can read and write each turn. The LLM sees the current state as a `<working_memory>` block in the prompt, and updates it by calling an `updateWorkingMemory` tool.
+Working Memory is the simplest built-in context layer. It acts as a scratchpad that the agent can read and write each turn. The LLM sees the current state as a `<working_memory>` block in the prompt, and updates it by calling an `updateWorkingMemory` tool.
 
 - **Slot**: `100` (`Slot.WORKING_MEMORY`)
 - **Default scope**: `thread`
@@ -14,9 +14,9 @@ Working Memory is the simplest built-in memory layer. It acts as a scratchpad th
 ## Usage
 
 ```ts
-import { workingMemory } from '@noetic-tools/core';
+import { workingMemoryContext } from '@noetic-tools/core';
 
-const layer = workingMemory({
+const layer = workingMemoryContext({
   scope: 'thread',
   readOnly: false,
 });
@@ -28,14 +28,14 @@ Register the layer with a `react` pattern (or `spawn`'s `memory` option):
 const agent = react({
   model: 'openai/gpt-4o',
   instructions: 'You are a helpful assistant.',
-  memory: [layer],
+  context: [layer],
 });
 ```
 
 ## Configuration
 
 ```ts validate=none
-interface WorkingMemoryConfig {
+interface WorkingMemoryContextConfig {
   scope?: 'thread' | 'resource';
   schema?: ZodType;
   template?: string;
@@ -53,7 +53,7 @@ interface WorkingMemoryConfig {
 ## State Type
 
 ```ts validate=none
-type WorkingMemoryState = string | Record<string, unknown>;
+type WorkingMemoryContextState = string | Record<string, unknown>;
 ```
 
 When no `schema` is provided, state is a plain string. When a schema is provided, state is an object and updates are deep-merged: object-valued keys merge recursively, while arrays and primitives replace. Prototype-pollution keys (`__proto__`, `constructor`) are stripped at every depth.
@@ -84,9 +84,9 @@ When scope is `'resource'`, the parent state is deep-cloned to the child. For `'
 
 ```ts
 import { z } from 'zod';
-import { workingMemory } from '@noetic-tools/core';
+import { workingMemoryContext } from '@noetic-tools/core';
 
-const layer = workingMemory({
+const layer = workingMemoryContext({
   schema: z.object({
     currentGoal: z.string(),
     completedSteps: z.array(z.string()),
@@ -99,15 +99,15 @@ The LLM can then call `updateWorkingMemory({ currentGoal: 'Deploy v2', completed
 
 ## Provides
 
-Working Memory exposes two entries via the `provides` API, making them accessible on `ctx.memory['working-memory']`:
+Working Memory exposes two entries via the `provides` API, making them accessible on `ctx.context['working-context']`:
 
 ### `snapshot` (data)
 
 A read-only projection of the current working memory state.
 
 ```ts validate=none
-const current = ctx.memory['working-memory'].snapshot;
-// Returns WorkingMemoryState (string | Record<string, unknown>)
+const current = ctx.context['working-context'].snapshot;
+// Returns WorkingMemoryContextState (string | Record<string, unknown>)
 ```
 
 ### `update` (function)
@@ -115,7 +115,7 @@ const current = ctx.memory['working-memory'].snapshot;
 Merges key-value pairs into the current state. Accepts a `Record<string, unknown>` argument.
 
 ```ts validate=none
-await ctx.memory['working-memory'].update({ currentGoal: 'Ship v2' });
+await ctx.context['working-context'].update({ currentGoal: 'Ship v2' });
 ```
 
 Because `update` is a `layerFn`, the runtime automatically injects it as an LLM tool named `working-memory/update`. The model can call this tool directly to modify working memory during a conversation turn.

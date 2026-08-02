@@ -1,6 +1,6 @@
 ---
 title: Static Content
-description: A read-only memory layer that loads instructional content once at init and injects it into every recall, wrapped in an XML tag.
+description: A read-only context layer that loads instructional content once at init and injects it into every recall, wrapped in an XML tag.
 ---
 
 ## Overview
@@ -37,7 +37,7 @@ The model then sees:
 interface StaticContentOpts {
   id?: string;            // default 'static-content'
   slot?: number;          // default Slot.WORKING_MEMORY + 5
-  scope?: MemoryScope;    // default 'resource'
+  scope?: ContextScope;    // default 'resource'
   load: () => Promise<string>;
   tag?: string;           // default 'instructions'
 }
@@ -47,7 +47,7 @@ interface StaticContentOpts {
 |---|---|---|---|
 | `id` | `string` | `'static-content'` | Layer id — set one per instance when stacking several static layers |
 | `slot` | `number` | `105` | Position in the assembled view |
-| `scope` | `MemoryScope` | `'resource'` | Persistence boundary |
+| `scope` | `ContextScope` | `'resource'` | Persistence boundary |
 | `load` | `() => Promise<string>` | required | Loads the content once at `init`. An empty result yields an empty layer |
 | `tag` | `string` | `'instructions'` | XML tag name wrapping the content |
 

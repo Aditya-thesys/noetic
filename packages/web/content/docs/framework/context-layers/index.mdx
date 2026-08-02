@@ -1,24 +1,24 @@
 ---
-title: Memory Layer System
-description: How Noetic's memory layers inject long-term and short-term context into every LLM call through a slot-based, scoped architecture.
+title: Context Layer System
+description: How Noetic's context layers inject long-term and short-term context into every LLM call through a slot-based, scoped architecture.
 ---
 
 ## Overview
 
-Noetic's memory system is built around **MemoryLayer** objects. Each layer occupies a numbered slot, declares a scope, and implements lifecycle hooks that run before and after every LLM call. The runtime merges all layer outputs into a single prompt view via `assembleView()`.
+Noetic's context system is built around **ContextLayer** objects. Each layer occupies a numbered slot, declares a scope, and implements lifecycle hooks that run before and after every LLM call. The runtime merges all layer outputs into a single prompt view via `assembleView()`.
 
-## MemoryLayer Interface
+## ContextLayer Interface
 
-Every memory layer implements this interface:
+Every context layer implements this interface:
 
 ```ts validate=none
-interface MemoryLayer<TState = unknown> {
+interface ContextLayer<TState = unknown> {
   id: string;
   name?: string;
   slot: number;
-  scope: MemoryScope;
+  scope: ContextScope;
   budget?: BudgetConfig;
-  hooks: MemoryHooks<TState>;
+  hooks: ContextLayerHooks<TState>;
   timeouts?: Partial<LayerTimeouts>;
   onInitError?: 'throw' | 'disable';
   recallMode?: 'atomic' | 'eventual';
@@ -30,9 +30,9 @@ interface MemoryLayer<TState = unknown> {
 | `id` | `string` | Unique identifier for the layer |
 | `name` | `string` (optional) | Human-readable display name |
 | `slot` | `number` | Ordering priority -- lower slots appear first in the assembled view |
-| `scope` | `MemoryScope` | Persistence boundary for stored state |
+| `scope` | `ContextScope` | Persistence boundary for stored state |
 | `budget` | `BudgetConfig` | Token budget allocation for this layer |
-| `hooks` | `MemoryHooks<TState>` | Lifecycle callbacks |
+| `hooks` | `ContextLayerHooks<TState>` | Lifecycle callbacks |
 | `timeouts` | `Partial<LayerTimeouts>` | Per-hook timeout overrides in milliseconds |
 | `onInitError` | `'throw' \| 'disable'` | What to do when `init` throws: `'throw'` (default) aborts the execution; `'disable'` skips this layer for the run |
 | `recallMode` | `'atomic' \| 'eventual'` | Whether `recall()` blocks the model call (`'atomic'`, default) or is served from a cache that refreshes after `store()` (`'eventual'`) |
@@ -57,7 +57,7 @@ const Slot = {
 
 You can use any number for custom layers. The built-in constants are guidelines, not hard constraints.
 
-## MemoryScope
+## ContextScope
 
 Scope controls the persistence boundary of a layer's state:
 
@@ -69,7 +69,7 @@ Scope controls the persistence boundary of a layer's state:
 | `'execution'` | State lives only for the duration of a single agent run |
 
 ```ts validate=none
-type MemoryScope = 'thread' | 'resource' | 'global' | 'execution';
+type ContextScope = 'thread' | 'resource' | 'global' | 'execution';
 ```
 
 ## BudgetConfig
@@ -101,7 +101,7 @@ interface ProjectionPolicy {
 
 | Field | Type | Purpose |
 |---|---|---|
-| `tokenBudget` | `number` | Total token budget for all memory layers combined |
+| `tokenBudget` | `number` | Total token budget for all context layers combined |
 | `responseReserve` | `number` | Tokens reserved for the model's response |
 | `overflow` | `'truncate' \| 'summarize' \| 'sliding_window'` | Strategy when total recall exceeds the budget |
 | `overflowModel` | `string` | Model used for summarization overflow (when `overflow` is `'summarize'`) |
@@ -109,7 +109,7 @@ interface ProjectionPolicy {
 
 ## Hook Lifecycle
 
-Memory hooks fire in a deterministic order during agent execution:
+Layer hooks fire in a deterministic order during agent execution:
 
 ```
 init → recall → [LLM call] → store → ... (loop) → onComplete → dispose
@@ -138,7 +138,7 @@ init → recall → [LLM call] → store → ... (loop) → onComplete → dispo
 ### Hook Type Signatures
 
 ```ts validate=none
-interface MemoryHooks<TState = unknown> {
+interface ContextLayerHooks<TState = unknown> {
   init?: (params: InitParams) => Promise<InitResult<TState>>;
   recall?: (params: RecallParams<TState>) => Promise<RecallResult<TState> | string | null>;
   projectHistory?: (params: ProjectHistoryParams<TState>) => Promise<ProjectHistoryResult>;
@@ -157,9 +157,9 @@ interface MemoryHooks<TState = unknown> {
 
 ## assembleView()
 
-The standalone `assembleView()` function (from `memory/projector.ts`) merges system-prompt, layer `recall` output, and conversation-history `Item` objects into a single ordered list that is sent to the LLM. The runtime calls it for you on every turn — you rarely need it directly.
+The standalone `assembleView()` function (from `context/projector.ts`) merges system-prompt, layer `recall` output, and conversation-history `Item` objects into a single ordered list that is sent to the LLM. The runtime calls it for you on every turn — you rarely need it directly.
 
-**Unstable API.** `assembleView` is intended for authors of custom memory backends and framework extensions. Import it from `@noetic-tools/core/unstable`; its signature may change in any minor release.
+**Unstable API.** `assembleView` is intended for authors of custom context backends and framework extensions. Import it from `@noetic-tools/core/unstable`; its signature may change in any minor release.
 
 ```ts
 import type { Item } from '@noetic-tools/core';
@@ -197,38 +197,38 @@ interface LayerTimeouts {
 }
 ```
 
-If a non-init hook exceeds its timeout, the runtime logs a diagnostic and continues without that layer's contribution for that phase. `init` is different: an `init` failure (including timeout) **re-throws and aborts the execution by default** — memory is load-bearing, and silently disabling a layer would hide failures. A layer opts into skip-on-failure by setting `onInitError: 'disable'`, in which case the runtime logs a diagnostic and runs the execution without that layer.
+If a non-init hook exceeds its timeout, the runtime logs a diagnostic and continues without that layer's contribution for that phase. `init` is different: an `init` failure (including timeout) **re-throws and aborts the execution by default** — context is load-bearing, and silently disabling a layer would hide failures. A layer opts into skip-on-failure by setting `onInitError: 'disable'`, in which case the runtime logs a diagnostic and runs the execution without that layer.
 
 ## Layer Provides API
 
-Layers can expose typed data and functions via the `provides` field. Provided entries are accessible in code steps through `ctx.memory['layerId']`, and provided functions are automatically injected as LLM tools (namespaced as `layerId/fnName`).
+Layers can expose typed data and functions via the `provides` field. Provided entries are accessible in code steps through `ctx.context['layerId']`, and provided functions are automatically injected as LLM tools (namespaced as `layerId/fnName`).
 
-Use the `memory()` builder and `InferMemory<>` utility type for compile-time type safety:
+Use the `context()` builder and `InferContext<>` utility type for compile-time type safety:
 
 ```ts
-import { memory, workingMemory, type Context, type InferMemory } from '@noetic-tools/core';
+import { context, workingMemoryContext, type Context, type InferContext } from '@noetic-tools/core';
 
-const mem = memory([workingMemory()]);
-type Mem = InferMemory<typeof mem>;
+const mem = context([workingMemoryContext()]);
+type Mem = InferContext<typeof mem>;
 
 declare const ctx: Context<Mem>;
 
-// In a step, ctx.memory is fully typed:
-const snap = ctx.memory['working-memory'].snapshot; // WorkingMemoryState
-await ctx.memory['working-memory'].update({ key: 'value' });
+// In a step, ctx.context is fully typed:
+const snap = ctx.context['working-context'].snapshot; // WorkingMemoryContextState
+await ctx.context['working-context'].update({ key: 'value' });
 ```
 
-See [Custom Layers](/docs/framework/memory/custom-layers) for how to define your own `provides` entries using `layerData()` and `layerFn()`.
+See [Custom Layers](/docs/framework/context-layers/custom-layers) for how to define your own `provides` entries using `layerData()` and `layerFn()`.
 
 ## Next Steps
 
-- [Working Memory](/docs/framework/memory/working-memory) -- scratchpad for the current turn
-- [Observational Memory](/docs/framework/memory/observational-memory) -- auto-extracted facts
-- [Temporal Memory](/docs/framework/memory/temporal-memory) -- timestamped fact ledger with relative-time recall
-- [Steering](/docs/framework/memory/steering) -- rule-based allow/deny/guide control over tool calls and responses
-- [File Reference](/docs/framework/memory/file-reference) -- `#path` file tracking with priority-scored content injection
-- [Static Content](/docs/framework/memory/static-content) -- load-once instructional content
-- [History Window](/docs/framework/memory/history-window) -- cap items sent to the LLM
-- [Custom Layers](/docs/framework/memory/custom-layers) -- build your own
-- [Plan Memory](/docs/framework/memory/plan-memory) -- PRD authoring and plan execution lifecycle
-- [Tool Memory](/docs/framework/memory/tool-memory) -- imperative state access and function-call memory
+- [Working Memory](/docs/framework/context-layers/working-memory-context) -- scratchpad for the current turn
+- [Observational Context](/docs/framework/context-layers/observational-context) -- auto-extracted facts
+- [Temporal Context](/docs/framework/context-layers/temporal-context) -- timestamped fact ledger with relative-time recall
+- [Steering](/docs/framework/context-layers/steering) -- rule-based allow/deny/guide control over tool calls and responses
+- [File Reference](/docs/framework/context-layers/file-reference) -- `#path` file tracking with priority-scored content injection
+- [Static Content](/docs/framework/context-layers/static-content) -- load-once instructional content
+- [History Window](/docs/framework/context-layers/history-window) -- cap items sent to the LLM
+- [Custom Layers](/docs/framework/context-layers/custom-layers) -- build your own
+- [Plan Context](/docs/framework/context-layers/plan-context) -- PRD authoring and plan execution lifecycle
+- [Tool Context](/docs/framework/context-layers/tool-context) -- imperative state access and function-call state

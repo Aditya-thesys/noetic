@@ -1,11 +1,11 @@
 ---
-title: Observational Memory
-description: A memory layer that automatically extracts and distills facts from conversation history using a configurable observer function.
+title: Observational Context
+description: A context layer that automatically extracts and distills facts from conversation history using a configurable observer function.
 ---
 
 ## Overview
 
-Observational Memory accumulates conversation text into a buffer, and when the buffer crosses a token threshold, distills the content into a list of observations. These observations persist across turns and are injected as an `<observations>` block in the prompt.
+Observational Context accumulates conversation text into a buffer, and when the buffer crosses a token threshold, distills the content into a list of observations. These observations persist across turns and are injected as an `<observations>` block in the prompt.
 
 - **Slot**: `200` (`Slot.OBSERVATIONS`)
 - **Default scope**: `resource`
@@ -15,9 +15,9 @@ Observational Memory accumulates conversation text into a buffer, and when the b
 ## Usage
 
 ```ts
-import { observationalMemory } from '@noetic-tools/core';
+import { observationalContext } from '@noetic-tools/core';
 
-const layer = observationalMemory({
+const layer = observationalContext({
   bufferThreshold: 2000,
   maxObservations: 50,
   observer: async (buffer) => {
@@ -30,7 +30,7 @@ const layer = observationalMemory({
 ## Configuration
 
 ```ts validate=none
-interface ObservationalMemoryConfig {
+interface ObservationalContextConfig {
   bufferThreshold?: number;
   maxObservations?: number;
   scope?: 'thread' | 'resource';
@@ -96,9 +96,9 @@ Deep-clones the parent state to the child, so spawned agents inherit existing ob
 ## Example: LLM-Powered Observer
 
 ```ts validate=none
-import { observationalMemory } from '@noetic-tools/core';
+import { observationalContext } from '@noetic-tools/core';
 
-const layer = observationalMemory({
+const layer = observationalContext({
   observer: async (buffer) => {
     const text = buffer.join('\n');
     // Use any LLM call to extract structured facts

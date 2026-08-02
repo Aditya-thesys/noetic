@@ -218,7 +218,7 @@ function LlmBox(): ReactNode {
   );
 }
 
-export function MemoryIsometricSvg(): ReactNode {
+export function ContextIsometricSvg(): ReactNode {
   const writeDownPath = `M${WRITE_X},${WIRE_TOP_Y} L${WRITE_X},${WIRE_BOTTOM_Y}`;
   const readUpPath = `M${READ_X},${WIRE_BOTTOM_Y} L${READ_X},${WIRE_TOP_Y}`;
 
@@ -227,7 +227,7 @@ export function MemoryIsometricSvg(): ReactNode {
       viewBox="0 -14 500 314"
       width="100%"
       role="img"
-      aria-label="Five stacked memory layers. A green write wire propagates data down through all layers. A cyan read wire assembles context upward into an LLM node."
+      aria-label="Five stacked context layers. A green write wire propagates data down through all layers. A cyan read wire assembles context upward into an LLM node."
       style={{
         display: 'block',
       }}

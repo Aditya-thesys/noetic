@@ -1,11 +1,11 @@
 ---
-title: Episodic Memory
-description: A memory layer that stores and retrieves summaries of past conversation episodes for long-running agents.
+title: Episodic Context
+description: A context layer that stores and retrieves summaries of past conversation episodes for long-running agents.
 ---
 
 ## Overview
 
-Episodic Memory captures summaries of past conversations or execution episodes. When an agent runs across many sessions, episodic memory gives it awareness of what happened previously without replaying full conversation logs.
+Episodic Context captures summaries of past conversations or execution episodes. When an agent runs across many sessions, episodic context gives it awareness of what happened previously without replaying full conversation logs.
 
 - **Slot**: `300` (`Slot.EPISODIC`)
 - **Scope**: `resource`
@@ -14,12 +14,12 @@ Episodic Memory captures summaries of past conversations or execution episodes. 
 
 Each time an agent completes an execution, the `onComplete` hook generates a summary of the conversation and stores it as an episode. On future runs, the `recall` hook retrieves the most recent or most relevant episodes and injects them into the prompt, giving the agent temporal context.
 
-## Building an Episodic Memory Layer
+## Building an Episodic Context Layer
 
 Noetic provides the slot constant and lifecycle hooks. You implement the layer with your preferred summarization and retrieval strategy:
 
 ```ts
-import type { MemoryLayer } from '@noetic-tools/core';
+import type { ContextLayer } from '@noetic-tools/core';
 import { Slot } from '@noetic-tools/core';
 
 interface Episode {
@@ -34,17 +34,17 @@ interface EpisodicState {
   episodes: Episode[];
 }
 
-interface EpisodicMemoryConfig {
+interface EpisodicContextConfig {
   maxEpisodes?: number;
   summarize: (items: ReadonlyArray<unknown>) => Promise<string>;
 }
 
-function episodicMemory(config: EpisodicMemoryConfig): MemoryLayer<EpisodicState> {
+function episodicContext(config: EpisodicContextConfig): ContextLayer<EpisodicState> {
   const maxEpisodes = config.maxEpisodes ?? 20;
 
   return {
-    id: 'episodic-memory',
-    name: 'Episodic Memory',
+    id: 'episodic-context',
+    name: 'Episodic Context',
     slot: Slot.EPISODIC,
     scope: 'resource',
     budget: { min: 300, max: 2000 },
@@ -114,5 +114,5 @@ function episodicMemory(config: EpisodicMemoryConfig): MemoryLayer<EpisodicState
 
 ## Next Steps
 
-- [Semantic Recall](/docs/framework/memory/semantic-recall) -- vector-indexed retrieval for larger knowledge bases
-- [Custom Layers](/docs/framework/memory/custom-layers) -- full guide to implementing any memory layer
+- [Semantic Recall](/docs/framework/context-layers/semantic-recall) -- vector-indexed retrieval for larger knowledge bases
+- [Custom Layers](/docs/framework/context-layers/custom-layers) -- full guide to implementing any context layer

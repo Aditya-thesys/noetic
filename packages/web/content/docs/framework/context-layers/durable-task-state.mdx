@@ -81,7 +81,7 @@ Records the execution outcome (`'success'`, `'failure'`, or `'aborted'`) in `dat
 
 ## Writing to the layer
 
-The layer exposes two functions to the model as tools, so an agent can report what it produced. They are also callable from code via `ctx.memory['durable-task-state']`.
+The layer exposes two functions to the model as tools, so an agent can report what it produced. They are also callable from code via `ctx.context['durable-task-state']`.
 
 | Tool | Input | Effect |
 |---|---|---|
@@ -143,5 +143,5 @@ const layer = durableTaskState();
 
 ## Next Steps
 
-- [Working Memory](/docs/framework/memory/working-memory) -- lightweight scratchpad alternative
-- [Custom Layers](/docs/framework/memory/custom-layers) -- build your own persistence layer
+- [Working Memory](/docs/framework/context-layers/working-memory-context) -- lightweight scratchpad alternative
+- [Custom Layers](/docs/framework/context-layers/custom-layers) -- build your own persistence layer

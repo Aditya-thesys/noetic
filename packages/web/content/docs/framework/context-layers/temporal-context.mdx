@@ -1,6 +1,6 @@
 ---
-title: Temporal Memory
-description: An LLM-backed memory layer that distills the conversation into a ledger of timestamped facts and answers relative-time queries on demand.
+title: Temporal Context
+description: An LLM-backed context layer that distills the conversation into a ledger of timestamped facts and answers relative-time queries on demand.
 ---
 
 ## Overview
@@ -15,9 +15,9 @@ Temporal Memory addresses a failure class that pure recall cannot fix: relative-
 ## Usage
 
 ```ts validate=none
-import { temporalMemory } from '@noetic-tools/core';
+import { temporalContext } from '@noetic-tools/core';
 
-const layer = temporalMemory({
+const layer = temporalContext({
   extract: async ({ transcript, now }) => {
     // LLM call that returns [{ ts: '2026-06-01T10:00:00Z', fact: '...' }, ...]
     return extractFacts(transcript, now);
@@ -32,9 +32,9 @@ const layer = temporalMemory({
 ## Configuration
 
 ```ts validate=none
-interface TemporalMemoryConfig {
+interface TemporalContextConfig {
   now?: () => Date;
-  scope?: MemoryScope;
+  scope?: ContextScope;
   extract?: FactExtractor;
   search?: FactSearcher;
   bufferThreshold?: number;
@@ -54,7 +54,7 @@ type FactSearcher = (input: {
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `now` | `() => Date` | system clock | Injectable clock for date grounding and extraction (tests/replay) |
-| `scope` | `MemoryScope` | `'resource'` | Persistence boundary (long-term, cross-session by default) |
+| `scope` | `ContextScope` | `'resource'` | Persistence boundary (long-term, cross-session by default) |
 | `extract` | `FactExtractor` | -- | LLM-backed fact extractor. Omitted → the layer only buffers; it never fabricates facts |
 | `search` | `FactSearcher` | -- | LLM-backed fact searcher. Omitted → `searchMemory` returns the raw ledger |
 | `bufferThreshold` | `number` | `2000` | Buffered tokens that trigger an extraction pass |
@@ -72,7 +72,7 @@ type FactSearcher = (input: {
 
 ## The `searchMemory` Tool
 
-The layer provides one `layerFn`, exposed to the model as the `temporal/searchMemory` tool and to code as `ctx.memory['temporal'].searchMemory({ query })`:
+The layer provides one `layerFn`, exposed to the model as the `temporal/searchMemory` tool and to code as `ctx.context['temporal'].searchMemory({ query })`:
 
 ```ts validate=none
 type TemporalSearchResult = {
@@ -86,4 +86,4 @@ Without an injected `search` callback the tool degrades gracefully, returning th
 
 ## Design
 
-The layer is LLM-agnostic: `extract` and `search` are host-injected (mirroring `observationalMemory`'s `observer`), keeping the memory package tree-shakable. The code agent wires structured `step.llm` calls as the callbacks and installs `temporalMemory()` in its default stack.
+The layer is LLM-agnostic: `extract` and `search` are host-injected (mirroring `observationalContext`'s `observer`), keeping the context package tree-shakable. The code agent wires structured `step.llm` calls as the callbacks and installs `temporalContext()` in its default stack.
