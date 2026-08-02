@@ -1,3 +1,7 @@
+## @noetic-tools/core-v5.1.0 (2026-08-02)
+
+* feat(core): carry framework-authored items in getItemStream ([ecb33bc](https://github.com/mattapperson/noetic/commit/ecb33bc))
+
 ## @noetic-tools/core-v5.0.0 (2026-08-02)
 
 * feat(core): add chat-sdk.dev integration and external channel read surface (#66) ([793f441](https://github.com/mattapperson/noetic/commit/793f441)), closes [#66](https://github.com/mattapperson/noetic/issues/66)
