@@ -1,3 +1,7 @@
+## @noetic-tools/memory-v3.1.0 (2026-08-02)
+
+* feat: rename the memory layer system to context layers ([123810f](https://github.com/mattapperson/noetic/commit/123810f))
+
 ## @noetic-tools/memory-v3.0.0 (2026-08-02)
 
 * fix: harden step.workflow caching and plan-layer state loading ([3b10168](https://github.com/mattapperson/noetic/commit/3b10168))
