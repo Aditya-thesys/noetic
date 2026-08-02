@@ -18,11 +18,25 @@
         "zod": "^4.0.0",
       },
     },
+    "packages/context": {
+      "name": "@noetic-tools/context",
+      "version": "2.0.0",
+      "dependencies": {
+        "@noetic-tools/types": "workspace:*",
+        "zod": "^4.0.0",
+      },
+      "devDependencies": {
+        "bun-types": "latest",
+      },
+      "peerDependencies": {
+        "zod": "^4.0.0",
+      },
+    },
     "packages/core": {
       "name": "@noetic-tools/core",
-      "version": "2.2.1",
+      "version": "3.2.0",
       "dependencies": {
-        "@noetic-tools/memory": "workspace:*",
+        "@noetic-tools/context": "workspace:*",
         "@noetic-tools/types": "workspace:*",
         "@openrouter/agent": "^0.6.0",
         "zod": "^4.0.0",
@@ -65,10 +79,9 @@
     },
     "packages/memory": {
       "name": "@noetic-tools/memory",
-      "version": "1.1.0",
+      "version": "2.0.0",
       "dependencies": {
-        "@noetic-tools/types": "workspace:*",
-        "zod": "^4.0.0",
+        "@noetic-tools/context": "workspace:*",
       },
       "devDependencies": {
         "bun-types": "latest",
@@ -79,9 +92,9 @@
     },
     "packages/openui": {
       "name": "@noetic-tools/openui",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "dependencies": {
-        "@noetic-tools/memory": "workspace:*",
+        "@noetic-tools/context": "workspace:*",
         "@noetic-tools/types": "workspace:*",
         "zod": "^4.0.0",
       },
@@ -202,7 +215,7 @@
     },
     "packages/types": {
       "name": "@noetic-tools/types",
-      "version": "1.4.0",
+      "version": "2.1.1",
       "dependencies": {
         "@openrouter/agent": "^0.6.0",
         "zod": "^4.0.0",
@@ -418,6 +431,8 @@
     "@next/swc-win32-arm64-msvc": ["@next/swc-win32-arm64-msvc@16.1.6", "", { "os": "win32", "cpu": "arm64" }, "sha512-gQmm8izDTPgs+DCWH22kcDmuUp7NyiJgEl18bcr8irXA5N2m2O+JQIr6f3ct42GOs9c0h8QF3L5SzIxcYAAXXw=="],
 
     "@next/swc-win32-x64-msvc": ["@next/swc-win32-x64-msvc@16.1.6", "", { "os": "win32", "cpu": "x64" }, "sha512-NRfO39AIrzBnixKbjuo2YiYhB6o9d8v/ymU9m/Xk8cyVk+k7XylniXkHwjs4s70wedVffc6bQNbufk5v0xEm0A=="],
+
+    "@noetic-tools/context": ["@noetic-tools/context@workspace:packages/context"],
 
     "@noetic-tools/core": ["@noetic-tools/core@workspace:packages/core"],
 
