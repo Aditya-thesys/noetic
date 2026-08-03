@@ -334,6 +334,12 @@ export function temporalContext(config?: TemporalContextConfig): ContextLayer<Te
     // Grounding sits near the top of the window, before reasoning content.
     slot: Slot.REMINDER,
     scope: config?.scope ?? 'resource',
+    // The `<current_datetime>` block changes every turn by construction, so
+    // anchoring it would re-bill the whole window each time. Churn telemetry
+    // would reach the same verdict — this just skips the learning cost. With
+    // grounding off, only the slow-moving fact ledger remains, which is worth
+    // anchoring, so leave that to `'auto'`.
+    placement: groundDateTime ? 'live' : 'auto',
     budget: {
       min: 0,
       max: injectLedger ? 800 : 200,

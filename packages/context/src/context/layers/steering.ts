@@ -251,6 +251,11 @@ export function steering(config: SteeringConfig) {
     name: 'Steering',
     slot: Slot.STEERING,
     scope,
+    // `recall` drains the pending queue as it renders, so its output can never
+    // be replayed from a pin — the drain is already committed, and serving an
+    // older render would lose the feedback for good. Rendering after history
+    // also puts guidance where the model weighs it most.
+    placement: 'live',
     budget: {
       min: 0,
       max: 500,

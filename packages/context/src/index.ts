@@ -17,6 +17,7 @@ export type {
 // @noetic-tools/context remains the one-stop import for context-layer authoring.
 export * from '@noetic-tools/types/contract';
 export * from './context/budget';
+export * from './context/cache-anchoring';
 export * from './context/exec-context-factory';
 export * from './context/function-call-utils';
 export * from './context/layer-api';

@@ -1,5 +1,6 @@
 import type {
   Context,
+  EpochUsage,
   LastLayerUsage,
   LayerUsageEntry,
   RecallLayerOutput,
@@ -26,13 +27,37 @@ function canWriteLayerUsage(ctx: Context): ctx is MutableLayerUsageContext {
 
 //#region Types
 
+/** How a layer's output was banded and pinned for this assembly. */
+export interface LayerServeInfo {
+  placement: 'anchor' | 'live';
+  served: 'fresh' | 'pinned';
+  changed: boolean;
+  churnRate: number;
+  rebillTokens: number;
+}
+
+const SERVED_FRESH_ANCHOR: LayerServeInfo = {
+  placement: 'anchor',
+  served: 'fresh',
+  changed: false,
+  churnRate: 0,
+  rebillTokens: 0,
+};
+
 interface ComputeLayerUsageParams {
   ctx: Context;
   modelId: string;
   instructions?: string;
   tools?: ReadonlyArray<Tool>;
-  /** Per-layer recall output assembled into the context view for this LLM call. */
+  /**
+   * Per-layer output as it was ACTUALLY served into the view — pinned replays
+   * included. Passing raw recall output here would report content the model
+   * never saw.
+   */
   recallResults: ReadonlyArray<RecallLayerOutput>;
+  /** Banding and pin status per layer id. Absent when context caching is off. */
+  serveInfo?: ReadonlyMap<string, LayerServeInfo>;
+  epoch?: EpochUsage;
 }
 
 //#endregion
@@ -57,12 +82,15 @@ export function computeLayerUsage({
   instructions,
   tools,
   recallResults,
+  serveInfo,
+  epoch,
 }: ComputeLayerUsageParams): LastLayerUsage {
   const layers: LayerUsageEntry[] = recallResults
     .map((r) => ({
       layerId: r.layerId,
       tokenCount: r.tokenCount,
       items: r.items,
+      ...(serveInfo?.get(r.layerId) ?? SERVED_FRESH_ANCHOR),
     }))
     .sort((a, b) => a.layerId.localeCompare(b.layerId));
 
@@ -84,6 +112,7 @@ export function computeLayerUsage({
     toolsTokens,
     historyTokens,
     totalUsedTokens,
+    epoch,
   };
 }
 

@@ -23,6 +23,9 @@ export function staticContent(opts: StaticContentOpts) {
     id: opts.id ?? 'static-content',
     slot: opts.slot ?? Slot.WORKING_MEMORY + 5,
     scope: opts.scope ?? 'resource',
+    // Loaded once in `init` and never rewritten, so it can be pinned outright
+    // rather than waiting for churn telemetry to work that out.
+    placement: 'anchor',
     hooks: {
       async init() {
         const raw = await opts.load();

@@ -516,21 +516,11 @@ export async function recallLayers({
   budgets,
   store,
   itemSchemas = defaultItemSchemaRegistry,
-}: RecallLayersParams): Promise<
-  {
-    layerId: string;
-    items: Item[];
-    tokenCount: number;
-  }[]
-> {
+}: RecallLayersParams): Promise<RecallEntry[]> {
   const sorted = [
     ...layers,
   ].sort((a, b) => a.slot - b.slot);
-  const results: {
-    layerId: string;
-    items: Item[];
-    tokenCount: number;
-  }[] = [];
+  const results: RecallEntry[] = [];
 
   for (const layer of sorted) {
     if (!layer.hooks.recall) {
@@ -575,12 +565,16 @@ export async function recallLayers({
         });
         continue;
       }
+      // Returning state means the render changed something, so it cannot be
+      // replayed from a pin — flag it so view assembly never anchors it.
+      const mutatedState = result.state !== undefined;
       results.push({
         layerId: layer.id,
         items: layerSchemas.parseMany(result.items),
         tokenCount: result.tokenCount,
+        mutatedState,
       });
-      if (result.state !== undefined) {
+      if (mutatedState) {
         store.set(ctx.executionId, layer.id, result.state);
       }
     } catch (e) {
@@ -595,6 +589,8 @@ type RecallEntry = {
   layerId: string;
   items: Item[];
   tokenCount: number;
+  /** See `RecallLayerOutput.mutatedState` — set when `recall` returned new state. */
+  mutatedState?: boolean;
 };
 
 interface RecallLayersModeParams extends RecallLayersParams {
@@ -664,7 +660,13 @@ export async function recallLayersEventual({
       continue;
     }
 
-    results.push(cached);
+    // Serving from cache commits nothing, so the flag from the render that
+    // populated it must not ride along — it would force the layer out of the
+    // anchor band for good, on turns where its recall never even ran.
+    results.push({
+      ...cached,
+      mutatedState: false,
+    });
   }
 
   return results;

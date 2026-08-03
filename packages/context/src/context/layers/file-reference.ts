@@ -6,6 +6,7 @@ import type {
   InputMessageItem,
   InputTextPart,
   Item,
+  RenderDeltaParams,
 } from '@noetic-tools/types';
 import { createMessage, estimateTokens, Slot } from '@noetic-tools/types';
 
@@ -910,6 +911,67 @@ async function recallFileReferences({
   };
 }
 
+/**
+ * Splits a rendered `# Referenced Files` block back into one entry per file,
+ * keyed by the `## <path>` heading.
+ */
+function splitFileBlocks(items: ReadonlyArray<Item>): Map<string, string> {
+  const blocks = new Map<string, string>();
+  for (const item of items) {
+    if (item.type !== 'message' || !('content' in item)) {
+      continue;
+    }
+    for (const part of item.content ?? []) {
+      if (!('text' in part) || typeof part.text !== 'string') {
+        continue;
+      }
+      for (const chunk of part.text.split(/\n(?=## )/)) {
+        const heading = chunk.match(/^## (.+)$/m);
+        if (heading?.[1]) {
+          blocks.set(heading[1].trim(), chunk.trim());
+        }
+      }
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Describes what changed about the tracked files rather than re-sending all of
+ * them. The whole set is usually large and usually stable, so a change to one
+ * file would otherwise cost a full republish.
+ */
+async function renderFileReferenceDelta({
+  prev,
+  next,
+}: RenderDeltaParams<FileReferenceState>): Promise<string | null> {
+  const before = splitFileBlocks(prev);
+  const after = splitFileBlocks(next);
+
+  const changed: string[] = [];
+  for (const [path, block] of after) {
+    if (before.get(path) !== block) {
+      changed.push(block);
+    }
+  }
+  const dropped = [
+    ...before.keys(),
+  ].filter((path) => !after.has(path));
+
+  if (changed.length === 0 && dropped.length === 0) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  if (changed.length > 0) {
+    parts.push(changed.join('\n\n'));
+  }
+  if (dropped.length > 0) {
+    parts.push(`No longer referenced: ${dropped.join(', ')}`);
+  }
+  return parts.join('\n\n');
+}
+
 //#endregion
 
 //#region Layer Factory
@@ -937,6 +999,9 @@ export function fileReference(opts?: FileReferenceOptions): ContextLayer<FileRef
     scope: 'thread',
     budget: 'auto',
     rerenderTiming: 'immediate',
+    // A large payload that changes rarely, and only a file at a time — the case
+    // anchoring plus a compact supersede is worth the most on.
+    placement: 'anchor',
     timeouts: {
       // onItemAppend reads files AND runs an LLM scoring call per new
       // reference (parallelized) — the 5s pipeline default silently drops the
@@ -947,6 +1012,7 @@ export function fileReference(opts?: FileReferenceOptions): ContextLayer<FileRef
       init: () => initFileReferenceState(runtime.baseDir),
       onItemAppend: (args) => onFileReferenceItemAppend(args, runtime),
       recall: recallFileReferences,
+      renderDelta: renderFileReferenceDelta,
     },
   } satisfies ContextLayer<FileReferenceState>;
 }

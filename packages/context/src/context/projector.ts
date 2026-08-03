@@ -6,8 +6,15 @@ import { stripUnresolvedToolCalls } from './strip-unresolved';
 
 interface AssembleViewParams {
   systemPromptItems: Item[];
+  /** Anchor band — layer output rendered before history, where a prompt cache can hold it. */
   layerOutputItems: Item[];
   historyItems: Item[];
+  /** Live band — layer output rendered after history, slot-ascending. */
+  liveLayerItems?: Item[];
+  /** Supersedes for anchored layers whose pinned output went stale. */
+  deltaItems?: Item[];
+  /** Items that must land last, after everything else. Never dropped. */
+  tailItems?: Item[];
   policy?: ProjectionPolicy;
 }
 
@@ -80,19 +87,34 @@ function keepRecentWithinBudget(
 //#region Public API
 
 /**
- * Assemble the model's context window from system prompt items, context-layer
- * recall output (slot-ascending), and conversation history.
+ * Assemble the model's context window in bands:
  *
- * Without a `policy` the inputs are concatenated as-is (optionally sliding the
- * history window by `windowSize`). With a `policy` the assembled view is held to
- * a hard token budget: system items are always kept; layer output is kept
- * low-slot-first (highest-slot dropped when tight); history takes the remainder,
- * keeping the most recent turns.
+ * ```
+ * system | anchor layers | history | live layers | supersedes | tail
+ * ```
+ *
+ * The split exists for the prompt cache, which matches on a prefix. Stable
+ * layer output sits ahead of history where it can be cached; volatile output
+ * sits after it, where re-rendering costs almost nothing. Both bands arrive
+ * slot-ascending.
+ *
+ * Without a `policy` the bands are concatenated as-is (optionally sliding the
+ * history window by `windowSize`). With a `policy` the view is held to a hard
+ * token budget, claimed in this order: system items, then anchor output, then
+ * live output, then supersedes, then the tail — with history taking whatever
+ * remains and keeping the most recent turns.
+ *
+ * Supersedes are claimed ahead of history, and all together or not at all: a
+ * dropped supersede would leave the model reading a pinned block the runtime
+ * knows is stale. The caller re-anchors instead — see `prepareBandedView`.
  */
 export function assembleView({
   systemPromptItems,
   layerOutputItems,
   historyItems,
+  liveLayerItems = [],
+  deltaItems = [],
+  tailItems = [],
   policy,
 }: AssembleViewParams): Item[] {
   if (!policy) {
@@ -100,20 +122,42 @@ export function assembleView({
       ...systemPromptItems,
       ...layerOutputItems,
       ...historyItems,
+      ...liveLayerItems,
+      ...deltaItems,
+      ...tailItems,
     ];
   }
 
   const budget = Math.max(0, policy.tokenBudget - policy.responseReserve);
   // System items are never dropped — they anchor the conversation.
-  const afterSystem = Math.max(0, budget - totalTokens(systemPromptItems));
-  const keptLayers = keepFrontWithinBudget(layerOutputItems, afterSystem);
-  const afterLayers = Math.max(0, afterSystem - totalTokens(keptLayers));
-  const keptHistory = keepRecentWithinBudget(historyItems, afterLayers, policy.windowSize);
+  let left = Math.max(0, budget - totalTokens(systemPromptItems));
+
+  const keptAnchor = keepFrontWithinBudget(layerOutputItems, left);
+  left = Math.max(0, left - totalTokens(keptAnchor));
+
+  const keptLive = keepFrontWithinBudget(liveLayerItems, left);
+  left = Math.max(0, left - totalTokens(keptLive));
+
+  // The tail carries steering guidance, which must reach the model whatever the
+  // budget says — it is the correction the retry exists to deliver.
+  left = Math.max(0, left - totalTokens(tailItems));
+
+  // Supersedes are never dropped either. Each one corrects a pinned block that
+  // is already in the view, so dropping one leaves the model reading content
+  // the runtime knows is stale — silent corruption, and far worse than losing
+  // a turn of history. History absorbs the cost; `deltaBudgetFraction` keeps
+  // the supersedes from growing large enough for that to hurt.
+  left = Math.max(0, left - totalTokens(deltaItems));
+
+  const keptHistory = keepRecentWithinBudget(historyItems, left, policy.windowSize);
 
   return [
     ...systemPromptItems,
-    ...keptLayers,
+    ...keptAnchor,
     ...keptHistory,
+    ...keptLive,
+    ...deltaItems,
+    ...tailItems,
   ];
 }
 
