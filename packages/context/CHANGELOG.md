@@ -1,3 +1,7 @@
+## @noetic-tools/context-v1.1.0 (2026-08-03)
+
+* feat(context): rebuild the plan-mode briefing and hold recall to its budget ([4ea86e1](https://github.com/mattapperson/noetic/commit/4ea86e1))
+
 ## @noetic-tools/context-v1.0.0 (2026-08-02)
 
 * chore(context): start the version line at 1.0.0 ([636a245](https://github.com/mattapperson/noetic/commit/636a245))
