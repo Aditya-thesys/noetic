@@ -1,3 +1,7 @@
+## @noetic-tools/context-v1.2.0 (2026-08-03)
+
+* feat(context): band the assembled view and pin anchored layers ([9fa94f4](https://github.com/mattapperson/noetic/commit/9fa94f4))
+
 ## @noetic-tools/context-v1.1.0 (2026-08-03)
 
 * feat(context): rebuild the plan-mode briefing and hold recall to its budget ([4ea86e1](https://github.com/mattapperson/noetic/commit/4ea86e1))
