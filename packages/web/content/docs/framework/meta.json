@@ -21,6 +21,7 @@
     "observability",
     "---Context---",
     "context-layers",
+    "prompt-caching",
     "---Patterns---",
     "patterns",
     "---Examples---",

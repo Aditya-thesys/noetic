@@ -177,13 +177,14 @@ type ContentPart =
 | `input` | `number` | Input tokens consumed |
 | `output` | `number` | Output tokens generated |
 | `total` | `number` | Total tokens |
+| `cached` | `number` | Prompt tokens served from the provider's cache, accumulated over the execution (optional) |
 
 ## StepMeta
 
 | Field | Type | Description |
 |---|---|---|
 | `toolCalls` | `FunctionCallItem[]` | Tool calls made in this step (optional) |
-| `usage` | `{ inputTokens, outputTokens, cachedTokens? }` | Token usage (optional) |
+| `usage` | `RoundUsage` — `{ inputTokens, outputTokens, cachedTokens?, cacheWriteTokens? }` | Token usage for the step. The two cache fields are `undefined` when the provider reports no cache figures, which is not the same as a reported zero (optional) |
 | `cost` | `number` | Step cost in USD (optional) |
 | `responseItems` | `ReadonlyArray<Item>` | Items produced by this step (optional) |
 
@@ -194,6 +195,11 @@ interface LayerUsageEntry {
   readonly layerId: string;
   readonly tokenCount: number;
   readonly items: ReadonlyArray<Item>;
+  readonly placement: 'anchor' | 'live';
+  readonly served: 'fresh' | 'pinned';
+  readonly changed: boolean;
+  readonly churnRate: number;
+  readonly rebillTokens: number;
 }
 ```
 
@@ -202,6 +208,35 @@ interface LayerUsageEntry {
 | `layerId` | `string` | The contributing context layer's id |
 | `tokenCount` | `number` | Self-reported token count from the layer's `recall()` output |
 | `items` | `ReadonlyArray<Item>` | Items this layer contributed to the context view for the last LLM call |
+| `placement` | `'anchor' \| 'live'` | The band the layer rendered into. Resolved, so an `'auto'` layer reports where it landed |
+| `served` | `'fresh' \| 'pinned'` | `'pinned'` when the items are a replay of an earlier render, held for the prompt cache |
+| `changed` | `boolean` | Whether the layer's fresh output differed from its pin, and so was superseded |
+| `churnRate` | `number` | Share of watched assemblies in which this layer's output changed, 0–1 |
+| `rebillTokens` | `number` | Tokens this layer's changes would have re-billed had it not been pinned |
+
+## EpochUsage
+
+Prompt-cache anchoring state behind the most recent assembly. See [Prompt Cache Anchoring](/docs/framework/context-layers#prompt-cache-anchoring).
+
+```ts validate=none
+interface EpochUsage {
+  readonly id: string;
+  readonly age: number;
+  readonly anchorTokens: number;
+  readonly liveTokens: number;
+  readonly deltaTokens: number;
+  readonly reanchorReason?: ReanchorReason;
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Identifies the run of assemblies sharing one set of pins |
+| `age` | `number` | Assemblies served by this epoch, including the one just made |
+| `anchorTokens` | `number` | Tokens in the anchor band — the cache-stable prefix |
+| `liveTokens` | `number` | Tokens in the live band, rendered after history |
+| `deltaTokens` | `number` | Tokens spent superseding stale anchors |
+| `reanchorReason` | [`ReanchorReason`](/docs/framework/api/context-layer-types#reanchorreason) | Set only on an assembly that re-anchored |
 
 ## LastLayerUsage
 
@@ -214,6 +249,7 @@ interface LastLayerUsage {
   readonly toolsTokens: number;
   readonly historyTokens: number;
   readonly totalUsedTokens: number;
+  readonly epoch?: EpochUsage;
 }
 ```
 
@@ -226,5 +262,6 @@ interface LastLayerUsage {
 | `toolsTokens` | `number` | Estimated tokens from the tool definitions sent to the model |
 | `historyTokens` | `number` | Estimated tokens for `itemLog` items not owned by a layer |
 | `totalUsedTokens` | `number` | Sum of all four buckets |
+| `epoch` | `EpochUsage \| undefined` | Anchoring state behind this assembly. Absent when `contextCache.enabled` is `false` |
 
 `LastLayerUsage` is captured by the runtime after each successful `callModel` and surfaced on `Context.lastLayerUsage` and `HarnessResponse.lastLayerUsage`. Use it for context-window introspection (e.g., the CLI `/context` command). The snapshot is overwritten on the next call; export to your observability span if you need historical retention.

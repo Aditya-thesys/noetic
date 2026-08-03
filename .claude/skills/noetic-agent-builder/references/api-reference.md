@@ -421,11 +421,14 @@ interface MemoryLayer<TState> {
   onInitError?: 'throw' | 'disable';
   /** Whether recall() blocks the model call. Default 'atomic'. */
   recallMode?: 'atomic' | 'eventual';
+  /** Which band of the view recall() output lands in. Default 'auto'. */
+  placement?: 'anchor' | 'live' | 'auto';
 }
 ```
 
 - **`onInitError`** — `'throw'` (default) surfaces the init error and aborts the execution; memory is load-bearing and silently disabling it hides failures (and for steering would fail *open*). `'disable'` logs a diagnostic and runs without the layer (its other hooks are skipped). Opt in only for non-critical layers.
 - **`recallMode`** — `'atomic'` (default) runs `recall()` synchronously before the model call. `'eventual'` serves `recall()` from a per-harness cache that never blocks; the cache refreshes after the layer's `store()` produces new state, so the next turn sees it. Use `'eventual'` for slow recall paths that can tolerate one-turn staleness.
+- **`placement`** — which band of the assembled view this layer's `recall()` output lands in, and so whether it is pinned for the prompt cache. `'anchor'` sits before history and is pinned; `'live'` sits after history and re-renders every turn; `'auto'` (default) lets the runtime pick from observed churn. See [Prompt-cache anchoring](#prompt-cache-anchoring-placement).
 
 ### Projection & recall budget
 
@@ -449,6 +452,7 @@ interface AgentConfig {
   // ...
   projection?: ProjectionPolicy;   // default for all LLM steps
   forceAtomicRecall?: boolean;     // recall every layer atomically, bypass the eventual cache
+  contextCache?: ContextCacheConfig; // prompt-cache anchoring; on by default
 }
 
 interface StepLLM {
@@ -458,8 +462,74 @@ interface StepLLM {
 ```
 
 - A single allocator (`allocateBudgets`) splits the recall budget: each layer's `budget.min` is satisfied first, then ~60% of the remainder funds a proportional pool across layers (by headroom `max − min`; `'auto'` and **omitted** budgets have infinite headroom and split the pool after finite layers take their share — the pool is fully conserved) and ~40% is reserved for conversation history. A layer never exceeds its `max`. NaN inputs throw `NoeticConfigError` (`INVALID_BUDGET_INPUT`); `Infinity` = uncapped.
-- `assembleView` then holds the final view to a hard cap (`tokenBudget − responseReserve`): system items are always kept, layer output is kept slot-ascending with each non-fitting item dropped **individually** (later-slot items that still fit are kept), history keeps the most recent turns, and orphan tool calls are stripped at the boundary.
+- `assembleView` then holds the final view to a hard cap (`tokenBudget − responseReserve`) and lays it out in bands:
+
+  ```
+  system | anchor layers | history | live layers | supersedes | tail
+  ```
+
+  Both layer bands arrive slot-ascending. The budget is claimed in this order: system items (never dropped), anchor output, live output, the tail, then the supersedes — with history taking whatever is left and keeping the most recent turns. Within a layer band each non-fitting item is dropped **individually** (later-slot items that still fit are kept); history is trimmed as a contiguous recent window and orphan tool calls are stripped at the boundary. Supersedes are never dropped — each corrects a pinned block already in the view, so dropping one would leave the model reading content known to be stale. History absorbs the cost instead.
 - `forceAtomicRecall: true` makes every layer atomic regardless of `recallMode`.
+
+### Prompt-cache anchoring (`placement`)
+
+A prompt cache matches on a prefix, so the first changed token invalidates everything after it. Putting volatile layer output ahead of a large stable history re-bills the whole window every turn. The bands fix that: stable output sits in the **anchor** band ahead of history where the cache can hold it, volatile output sits in the **live** band after history where re-rendering costs almost nothing.
+
+**A stable prefix is not enough on its own — Anthropic caching is opt-in.** Without a `cache_control` breakpoint on the request, Claude models cache nothing however byte-identical the prefix is; OpenAI and Gemini cache on their own and ignore the directive. Measured against a fixed 18,925-token prefix through this code path: Haiku 4.5 and Sonnet 4.5 both reported 0 cached tokens every turn with bands alone, and 18,922 from turn 2 once the breakpoint was added; `gpt-4o-mini` was unchanged at 17,024 of 17,126. So the banding delivered nothing on Claude until the runtime started asking for the cache. It now sends `cache_control: { type: 'ephemeral' }` on every model request while anchoring is on, and OpenRouter places the breakpoints. `contextCache: { enabled: false }` turns off the banding **and** the breakpoint — a cache write costs more than a read, so asking for one only pays off when something is deliberately holding the prefix still. Adapter note: the SDK validates the outbound request against a generated schema that drops unknown keys, so the directive must be injected where the body is final (Noetic uses a `beforeRequest` hook).
+
+An anchored layer is **pinned** for an *epoch*: the bytes sent on the first assembly are replayed unchanged on every later one. When its fresh `recall()` output stops matching the pin, the prefix is left alone and the change is published at the end of the view as one `<context_updates>` developer message — a supersede per stale layer, marked `replace`, `add`, or `retract`, telling the model these override the earlier block with the same layer id.
+
+The epoch only restarts when the cache is already dead. `ReanchorReason` is the exhaustive list: `'cold-start'`, `'instructions-changed'`, `'cache-miss'` (the model's own token report showed the prefix was not read), `'delta-pressure'` (supersedes outgrew the band they patch), `'delta-overflow'` (supersedes no longer fit the window), `'max-age'`. Re-anchoring is the only point at which an `'auto'` layer changes band, so the prefix cannot shift under the model mid-run.
+
+**Choosing a placement:**
+
+| Layer looks like | Use |
+|------------------|-----|
+| Large, changes rarely, or never after init — loaded instructions, file contents, a skills catalogue | `'anchor'` |
+| Changes every turn by construction — a clock, a turn counter, drained feedback, anything appended each round | `'live'` |
+| Genuinely unsure | `'auto'` (default) |
+
+`'auto'` starts anchored and moves on watched churn — the share of assemblies in which the layer's output changed. Above `autoDemoteChurn` (0.5) it goes live; at or below `autoPromoteChurn` (0.2) it comes back. The gap between the two is hysteresis, so a layer hovering near the boundary does not flip every epoch. Churn carries across epochs, halved each time, so a band is not relearnt from nothing. An explicit `'anchor'` or `'live'` is never overridden.
+
+**A layer whose `recall()` returns state is never pinned.** Returning `state` marks the call non-idempotent — it committed something — so replaying an older render would throw that commit away. The runtime forces such a layer live whatever its `placement` says. If your `recall()` drains a queue, advances a cursor, or otherwise mutates, declare `'live'` and stop thinking about it.
+
+**Config** (`AgentConfig.contextCache`, all optional):
+
+```typescript
+interface ContextCacheConfig {
+  enabled?: boolean;             // default true; false restores the old single-block layout AND
+                                 //   stops the cache_control breakpoint being sent
+  minCachedTokens?: number;      // 100  — cached tokens below this on the first round reads as a miss
+                                 //        (held to half the prefix when the prefix is smaller)
+  minEpochAssemblies?: number;   // 2    — assemblies before cache figures are judged (the first writes the cache)
+  maxEpochAssemblies?: number;   // 50   — re-anchor by age regardless
+  deltaBudgetFraction?: number;  // 0.15 — supersedes past this share of the anchor band are pressure,
+                                 //        subject to a 256-token floor so the wrapper alone never triggers it
+  autoDemoteChurn?: number;      // 0.5  — 'auto' churn at or above this goes live
+  autoPromoteChurn?: number;     // 0.2  — 'auto' churn at or below this returns to anchor
+  minChurnSamples?: number;      // 3    — assemblies watched before a band moves
+  churnDecay?: number;           // 0.5  — share of churn counters carried across a re-anchor
+}
+```
+
+Defaults are tuned to give an unconfigured layer set a stable prefix, so most agents never set this. A provider that reports no cache figures, or misses persistently, is marked cache-blind and stops being consulted; age and delta pressure still bound the epoch.
+
+**`renderDelta` hook** — optional, for anchored layers whose output is large and whose changes are small:
+
+```typescript
+interface RenderDeltaParams<TState> {
+  prev: ReadonlyArray<Item>;   // items still pinned — what the model currently sees
+  next: ReadonlyArray<Item>;   // the fresh render that would have replaced them
+  prevState: TState | undefined; // state as of pinning (by reference — in-place mutation shows through)
+  state: TState | undefined;     // current state
+  ctx: ExecutionContext;
+  budget: number;              // soft token budget for the returned text
+}
+
+renderDelta?(params: RenderDeltaParams<TState>): Promise<string | null>;
+```
+
+Return a compact description of the change, or `null` to fall back to republishing the full new content. Never called for `'live'` layers. A hook that throws or exceeds the layer's `recall` timeout (default 5s) falls back to the default — a supersede is a correctness obligation and is never skipped because a hook misbehaved. Worth implementing only when a republish would be expensive: `fileReference` implements it to send just the files that changed plus a "no longer referenced" line.
 
 ### workingMemory
 
@@ -490,6 +560,9 @@ temporalMemory({
   groundDateTime?,         // <current_datetime> on recall, default true
   injectLedger?,           // <remembered_facts> on recall, default false
 })
+// placement: 'live' while groundDateTime is on (the <current_datetime> block changes
+// every turn by construction); 'auto' with grounding off, leaving the slow-moving
+// fact ledger free to be anchored.
 // id 'temporal', slot Slot.REMINDER (80). LLM-agnostic: omit extract/search and the
 // layer only buffers / the tool returns the raw ledger (never fabricates facts).
 // Buffers assistant output (store) + user/tool input (onItemAppend) for extraction.
@@ -516,6 +589,9 @@ Tracks `#path/to/file` references in user messages: transforms them to anchor li
 ```typescript
 fileReference({ baseDir?, slot?, scoringModel?, maxFileSize?, followSymlinks?, allowedExtensions? })
 // id 'file-reference', slot Slot.RAG (350), scope 'thread', budget 'auto'
+// placement: 'anchor' — a large payload that changes a file at a time. Implements
+// renderDelta: a supersede carries only the changed file blocks plus a
+// "No longer referenced: ..." line, instead of republishing the whole set.
 ```
 
 ### staticContent
@@ -524,6 +600,8 @@ Loads content at init, injects as tagged XML block in every recall. When over bu
 
 ```typescript
 staticContent({ load: () => Promise<string>, tag?, id?, slot?, scope? })
+// placement: 'anchor' — loaded once in init and never rewritten, so it is pinned
+// outright rather than waiting for churn telemetry to reach the same verdict.
 ```
 
 ### historyWindow
@@ -765,7 +843,7 @@ Used in `store()` hooks to let the LLM update layer state via pseudo-tool calls 
 
 ### steering
 
-Intercepts tool calls and model responses via programmatic or LLM-evaluated rules. Maintains an activity ledger. Slot 90 (runs before all other layers).
+Intercepts tool calls and model responses via programmatic or LLM-evaluated rules. Maintains an activity ledger. Slot 90 (runs before all other layers). `placement: 'live'` — `recall` drains the pending feedback queue as it renders, so its output can never be replayed from a pin, and rendering after history is where the model weighs guidance most.
 
 ```typescript
 steering({
@@ -1446,6 +1524,8 @@ const Slot = {
 
 **`Slot.REMINDER` (80)** is reserved for layers that inject `<system-reminder>`-wrapped developer messages (turn-counter-throttled nags, plan-mode reminders, error-recovery hints). Reminder-slot layers maintain their own state and emit before any steering guidance.
 
+Slot orders layers **within** a band; `placement` picks the band. A slot-90 live layer therefore renders after a slot-350 anchored one, because the whole anchor band precedes history and the whole live band follows it. Slot still decides order among layers sharing a band, and which output is dropped first when the band is over budget. See [Prompt-cache anchoring](#prompt-cache-anchoring-placement).
+
 ## Cross-layer state reads
 
 `ExecutionContext.readLayerState<T>(layerId)` returns a sibling layer's current state (or `undefined`). Used when a layer needs to inspect another layer's progress — e.g. the CLI reminder layer reads `plan-memory` to know whether plan mode is active:
@@ -1725,6 +1805,10 @@ const keywordWatcher = {
 } satisfies MemoryLayer<{ docs: Doc[] }>;
 ```
 
+### renderDelta
+
+Called for an anchored layer whose pinned output has gone stale, to describe the change compactly instead of re-sending the block. Signature, fallback behaviour, and when it earns its keep: [Prompt-cache anchoring](#prompt-cache-anchoring-placement).
+
 ## Per-Layer Context Usage (`ctx.lastLayerUsage`)
 
 After every successful `callModel`, the runtime records a snapshot of how the context window decomposed across its contributors and stores it on `ctx.lastLayerUsage`. The same snapshot is mirrored on `HarnessResponse.lastLayerUsage` for callers that have already released the `Context`.
@@ -1734,6 +1818,20 @@ interface LayerUsageEntry {
   readonly layerId: string;
   readonly tokenCount: number;
   readonly items: ReadonlyArray<Item>;
+  readonly placement: 'anchor' | 'live';  // band the layer actually rendered into
+  readonly served: 'fresh' | 'pinned';    // 'pinned' = a replay of an earlier render
+  readonly changed: boolean;              // fresh output differed from the pin, so it was superseded
+  readonly churnRate: number;             // share of watched assemblies that changed, 0–1
+  readonly rebillTokens: number;          // tokens those changes would have re-billed unpinned
+}
+
+interface EpochUsage {
+  readonly id: string;
+  readonly age: number;          // assemblies served by this epoch, including this one
+  readonly anchorTokens: number;
+  readonly liveTokens: number;
+  readonly deltaTokens: number;
+  readonly reanchorReason?: ReanchorReason;  // set only on an assembly that re-anchored
 }
 
 interface LastLayerUsage {
@@ -1744,11 +1842,13 @@ interface LastLayerUsage {
   readonly toolsTokens: number;
   readonly historyTokens: number;
   readonly totalUsedTokens: number;
+  readonly epoch?: EpochUsage;   // absent when contextCache is off
 }
 ```
 
-- `layers[i].tokenCount` comes from each memory layer's own `recall()` `tokenCount`.
+- `layers[i].tokenCount` comes from each memory layer's own `recall()` `tokenCount`. For a pinned layer, `items` and `tokenCount` are the pinned bytes — what the model saw — not the fresh render.
 - The other three buckets are estimated via the framework's 4-chars-per-token heuristic.
+- `placement`, `served`, `churnRate`, and `epoch` are what a `/context` view needs to explain *why* a layer costs what it does — a high `rebillTokens` on an anchored layer is the saving anchoring bought.
 - Use this to power introspection UIs (e.g., the CLI `/context` command). The snapshot is overwritten on the next call — export to your span if you need historical retention.
 
 ## ToolExecutionContext

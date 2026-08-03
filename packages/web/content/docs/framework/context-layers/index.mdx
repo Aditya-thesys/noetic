@@ -22,6 +22,7 @@ interface ContextLayer<TState = unknown> {
   timeouts?: Partial<LayerTimeouts>;
   onInitError?: 'throw' | 'disable';
   recallMode?: 'atomic' | 'eventual';
+  placement?: LayerPlacement;
 }
 ```
 
@@ -29,17 +30,18 @@ interface ContextLayer<TState = unknown> {
 |---|---|---|
 | `id` | `string` | Unique identifier for the layer |
 | `name` | `string` (optional) | Human-readable display name |
-| `slot` | `number` | Ordering priority -- lower slots appear first in the assembled view |
+| `slot` | `number` | Ordering priority -- lower slots appear first within a band |
 | `scope` | `ContextScope` | Persistence boundary for stored state |
 | `budget` | `BudgetConfig` | Token budget allocation for this layer |
 | `hooks` | `ContextLayerHooks<TState>` | Lifecycle callbacks |
 | `timeouts` | `Partial<LayerTimeouts>` | Per-hook timeout overrides in milliseconds |
 | `onInitError` | `'throw' \| 'disable'` | What to do when `init` throws: `'throw'` (default) aborts the execution; `'disable'` skips this layer for the run |
 | `recallMode` | `'atomic' \| 'eventual'` | Whether `recall()` blocks the model call (`'atomic'`, default) or is served from a cache that refreshes after `store()` (`'eventual'`) |
+| `placement` | `'anchor' \| 'live' \| 'auto'` | Which band of the assembled view the layer renders into. See [Prompt Cache Anchoring](#prompt-cache-anchoring) |
 
 ## Slot Constants
 
-Slots determine the order in which layer outputs are injected into the prompt. Lower numbers appear first.
+Slots determine the order in which layer outputs are injected into the prompt, within their band. Lower numbers appear first.
 
 ```ts validate=none
 const Slot = {
@@ -125,6 +127,7 @@ init → recall → [LLM call] → store → ... (loop) → onComplete → dispo
 |---|---|---|
 | `init` | Agent starts | Load persisted state from storage |
 | `recall` | Before each LLM call | Inject items into the prompt |
+| `renderDelta` | When an anchored layer's pinned output goes stale | Describe the change compactly instead of republishing the whole block |
 | `projectHistory` | Before each LLM call, after `recall` | Cap or transform the history items projected to the LLM (read-side; never mutates `itemLog`) |
 | `onItemAppend` | Input items about to be appended | Filter, transform, or inject user/tool input items; may request a context re-render. Layers compose in slot order. Not called for LLM response items |
 | `beforeToolCall` | Before each tool execution | Steering: allow, deny, or guide the pending tool call |
@@ -141,6 +144,7 @@ init → recall → [LLM call] → store → ... (loop) → onComplete → dispo
 interface ContextLayerHooks<TState = unknown> {
   init?: (params: InitParams) => Promise<InitResult<TState>>;
   recall?: (params: RecallParams<TState>) => Promise<RecallResult<TState> | string | null>;
+  renderDelta?: (params: RenderDeltaParams<TState>) => Promise<string | null>;
   projectHistory?: (params: ProjectHistoryParams<TState>) => Promise<ProjectHistoryResult>;
   onItemAppend?: (params: OnItemAppendParams<TState>) => Promise<OnItemAppendResult<TState>>;
   beforeToolCall?: (params: BeforeToolCallParams<TState>) => Promise<BeforeToolCallResult<TState>>;
@@ -155,9 +159,125 @@ interface ContextLayerHooks<TState = unknown> {
 
 `recall` may return a bare `string` as shorthand — the runtime wraps it in a developer message and estimates its token count — or `null` to contribute nothing this turn.
 
+## Prompt Cache Anchoring
+
+Providers cache the prompt by **prefix**: the first token that differs from the last turn invalidates everything after it. Layer output that re-renders every turn therefore re-bills the whole conversation sitting behind it. Noetic assembles the context window in bands so the volatile parts sit *after* the stable ones:
+
+```
+[system] [anchor layers, slot asc] [history] [live layers, slot asc] [context updates] [tail]
+```
+
+Anchoring is on by default. Pass `contextCache: { enabled: false }` to the harness to fall back to the old single band, where every layer rendered before history.
+
+### Asking for the cache
+
+A stable prefix is necessary but not enough. **Anthropic caching is opt-in**: without a `cache_control` breakpoint on the request, Claude models cache nothing however byte-identical the prefix is. OpenAI and Gemini cache on their own and ignore the directive. Measured through this code path against a fixed 18,925-token prefix:
+
+| Model | Bands only | Bands + breakpoint |
+|---|---|---|
+| `anthropic/claude-haiku-4.5` | 0 cached, every turn | 18,922 cached from turn 2 |
+| `anthropic/claude-sonnet-4.5` | 0 cached, every turn | 18,922 cached from turn 2 |
+| `openai/gpt-4o-mini` | 17,024 of 17,126 | unchanged |
+
+So holding the prefix still bought nothing at all on Claude until the runtime started asking for the cache. It now sends `cache_control: { type: 'ephemeral' }` on every model request while anchoring is enabled, and OpenRouter places the breakpoints.
+
+The breakpoint rides on `contextCache.enabled` rather than going out unconditionally: a cache **write** costs more than a plain read, so it only pays off when something is deliberately holding the prefix still. `contextCache: { enabled: false }` turns off the banding and the breakpoint together.
+
+If you write your own adapter, note that the directive has to be injected where the outbound body is final — the OpenRouter SDK validates the request against a generated schema that silently drops keys it does not know, and `cache_control` is one of them. Noetic's adapter adds it in a `beforeRequest` hook for that reason.
+
+### Placement
+
+A layer's `placement` picks its band. `slot` still orders layers within a band.
+
+| Value | Renders | Use for |
+|---|---|---|
+| `'anchor'` | before history | Large, stable content: loaded instructions, tracked files, a retrieved corpus. |
+| `'live'` | after history | Content that changes every turn, or whose `recall()` mutates state. |
+| `'auto'` (default) | starts anchored | Everything else. The runtime watches how often the layer changes and moves it between bands. |
+
+Built-in layers ship with the placement that suits them:
+
+| Layer | Placement |
+|---|---|
+| [`staticContent`](/docs/framework/context-layers/static-content) | `'anchor'` |
+| [`fileReference`](/docs/framework/context-layers/file-reference) | `'anchor'`, and implements `renderDelta` |
+| [`steering`](/docs/framework/context-layers/steering) | `'live'` |
+| [`temporalContext`](/docs/framework/context-layers/temporal-context) | `'live'` with `groundDateTime`, otherwise `'auto'` |
+| everything else | `'auto'` |
+
+A layer whose `recall()` returns new state is **never** pinned, whatever its `placement` says: replaying an older render would drop the very thing that call committed. Steering drains its guidance queue as it renders, which is why it is live.
+
+### Epochs and supersedes
+
+An anchored layer is **pinned** — the items it rendered on the first assembly are re-sent byte-for-byte on every later assembly. A run of assemblies sharing one set of pins is an **epoch**.
+
+When a pinned layer's fresh output stops matching its pin, the runtime does not rewrite the prefix. It appends one developer message after history instead:
+
+```
+<context_updates epoch="t:thread-1#0">
+These supersede the blocks with the same layer id earlier in this context.
+Where they disagree, these are correct.
+<update layer="file-reference" action="replace">
+...
+</update>
+</context_updates>
+```
+
+`action` is `replace`, `add` (a layer that first produced output mid-epoch), or `retract` (a pinned layer that produced nothing this turn).
+
+The epoch re-anchors — fresh pins, no supersedes — only when the cache is already lost:
+
+| Reason | Trigger |
+|---|---|
+| `cold-start` | First assembly for this thread, or for a child execution. |
+| `instructions-changed` | The resolved instructions differ from what the epoch anchored against. |
+| `cache-miss` | The provider's own token report shows the prefix was not served from cache. |
+| `delta-pressure` | Supersedes cost more than `deltaBudgetFraction` of the anchor band. |
+| `delta-overflow` | Supersedes no longer fit the token budget. |
+| `max-age` | `maxEpochAssemblies` reached. |
+
+`'auto'` layers change band only at an epoch boundary, so the prefix cannot shift under the model mid-run. The choice reads observed **churn** — the share of assemblies in which the layer's output changed. A layer at or above `autoDemoteChurn` goes live; at or below `autoPromoteChurn` it goes back to the anchor band. The gap between the two thresholds is deliberate: a layer hovering near the line keeps the band it had rather than flipping every epoch.
+
+A provider that reports no cache figures, or that misses persistently, stops being consulted — age and delta pressure still bound the epoch.
+
+### Where the cache still breaks
+
+Once conversation history outgrows its share of the token budget, the oldest items start dropping each turn. That moves the boundary between the anchor band and history, so **the history portion of the cache is lost on every turn** even though `[system][anchor]` still caches. This is how the projector has always worked; anchoring does not change it, and a run that looks like it "stopped working" after a long conversation is usually this.
+
+Cap history with [`historyWindow`](/docs/framework/context-layers/history-window) so the drop happens at a size you chose, and the layer bands keep their full share of the budget instead of competing with an unbounded transcript.
+
+### ContextCacheConfig
+
+Tuning lives on the harness as `contextCache`:
+
+```ts validate=none
+const harness = new AgentHarness({
+  name: 'my-agent',
+  params: {},
+  contextCache: {
+    maxEpochAssemblies: 100,
+    autoDemoteChurn: 0.4,
+  },
+});
+```
+
+| Field | Default | Purpose |
+|---|---|---|
+| `enabled` | `true` | Master switch. When off, every layer renders before history as it did before bands existed, and no `cache_control` breakpoint is sent. |
+| `minCachedTokens` | `100` | Re-anchor when the first round reports fewer cached tokens than this. |
+| `minEpochAssemblies` | `2` | Assemblies an epoch must reach before its cache figures are judged. The assembly right after a re-anchor *writes* the cache rather than reading it. |
+| `maxEpochAssemblies` | `50` | Assemblies after which an epoch re-anchors regardless of cache figures. |
+| `deltaBudgetFraction` | `0.15` | Re-anchor once supersedes cost more than this fraction of the anchor band. |
+| `autoDemoteChurn` | `0.5` | An `'auto'` layer changing at least this often moves to the live band. |
+| `autoPromoteChurn` | `0.2` | An `'auto'` layer changing at most this often moves back to the anchor band. |
+| `minChurnSamples` | `3` | Assemblies a layer must be watched for before its placement moves. |
+| `churnDecay` | `0.5` | Fraction of the churn counters carried across a re-anchor. |
+
+`ctx.lastLayerUsage` reports what anchoring did on the last call — which band each layer landed in, whether it was served fresh or pinned, its churn rate, and the epoch's age and reason. See [Per-Layer Usage Breakdown](/docs/framework/context#per-layer-usage-breakdown).
+
 ## assembleView()
 
-The standalone `assembleView()` function (from `context/projector.ts`) merges system-prompt, layer `recall` output, and conversation-history `Item` objects into a single ordered list that is sent to the LLM. The runtime calls it for you on every turn — you rarely need it directly.
+The standalone `assembleView()` function (from `context/projector.ts`) merges system-prompt items, both layer bands, conversation history, supersedes, and the tail into a single ordered list that is sent to the LLM. The runtime calls it for you on every turn — you rarely need it directly.
 
 **Unstable API.** `assembleView` is intended for authors of custom context backends and framework extensions. Import it from `@noetic-tools/core/unstable`; its signature may change in any minor release.
 
@@ -166,16 +286,26 @@ import type { Item } from '@noetic-tools/core';
 import { assembleView } from '@noetic-tools/core/unstable';
 
 declare const systemPromptItems: Item[];
-declare const layerOutputItems: Item[]; // from layer recall, already sorted by slot
+declare const layerOutputItems: Item[]; // anchor band, already sorted by slot
 declare const historyItems: Item[];
+declare const liveLayerItems: Item[]; // live band, already sorted by slot
+declare const deltaItems: Item[]; // supersedes for stale anchors
+declare const tailItems: Item[]; // steering guidance; never dropped
 
 const items: Item[] = assembleView({
   systemPromptItems,
   layerOutputItems,
   historyItems,
+  liveLayerItems,
+  deltaItems,
+  tailItems,
 });
-// items = systemPrompt + layer outputs (slot order) + history
+// items = system + anchor + history + live + supersedes + tail
 ```
+
+Only `systemPromptItems`, `layerOutputItems`, and `historyItems` are required; omit the rest for a single-band view.
+
+With no `policy` the bands are concatenated as-is. With a `policy` the view is held to a hard token budget, claimed in this order: system items, anchor output, live output, the tail, then supersedes — with history taking whatever remains and keeping the most recent turns. Supersedes are claimed all together or not at all, since a dropped supersede would leave the model reading a block the runtime knows is stale; the runtime re-anchors instead.
 
 ## LayerTimeouts
 

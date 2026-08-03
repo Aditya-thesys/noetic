@@ -1,0 +1,228 @@
+---
+title: Prompt Caching
+description: How Noetic keeps the prompt prefix stable so providers cache it, and how changes are published without rewriting it.
+---
+
+Providers cache prompts by **prefix**. They match the front of your request against what they saw last time, and the match stops at the first byte that differs — everything after it is billed and processed as new.
+
+That makes the *order* of a context window worth money. Noetic assembles it so the stable parts come first and the churning parts come last, holds the front of it byte-identical between turns, and publishes changes as a short note at the end rather than by rewriting what the model already read.
+
+None of this needs configuring. It is on by default, and the rest of this page is about what it does and how to tune it when you care.
+
+## The problem it solves
+
+A context layer re-renders on every turn. Some of them genuinely change every time — a layer that grounds the current time writes a new clock value each turn by construction.
+
+Layer output used to sit *before* conversation history, ordered by `slot`:
+
+```
+[system] [layer output, slot ascending] [history]
+```
+
+`slot` orders layers by what they mean — grounding before reasoning, reminders before guidance. That ordering is good for the model and terrible for the cache. A twelve-token clock at slot 80 sits in front of a hundred thousand tokens of history, so one changed digit re-bills the entire window. Every turn.
+
+## Bands
+
+The view is now split, and volatility decides which side of history a layer lands on:
+
+```
+[system]           never dropped
+[anchor layers]    before history — held byte-identical, cacheable
+[history]
+[live layers]      after history — free to change every turn
+[context updates]  one message correcting stale anchors
+[tail]             steering guidance, never dropped
+```
+
+`slot` still orders layers **within** a band. `placement` picks the band. A slot-90 live layer therefore renders *after* a slot-350 anchored one — placement wins, slot breaks ties.
+
+| Placement | Meaning |
+| --- | --- |
+| `'anchor'` | Before history. Pinned for the epoch. |
+| `'live'` | After history. Re-rendered freely. |
+| `'auto'` (default) | Starts anchored; the runtime may move it once it has watched how often it changes. |
+
+```ts
+const layer = {
+  id: 'reference-files',
+  slot: Slot.RAG,
+  scope: 'thread',
+  placement: 'anchor',
+  hooks: {
+    /* ... */
+  },
+};
+```
+
+Most layers should declare nothing. `'auto'` exists because how often a layer changes usually depends on the workload, not the layer, and the runtime can measure that better than you can guess it.
+
+Declare a placement when you know something the runtime cannot learn cheaply:
+
+- **`'live'`** when the layer changes every turn by construction, or when its `recall()` changes state as it renders.
+- **`'anchor'`** when the content genuinely cannot change mid-session.
+
+## Epochs and pinning
+
+An **epoch** is a run of assemblies that share a cacheable prefix. The first assembly of an epoch pins each anchored layer's rendered output. Every later assembly re-sends those exact items — even when `recall()` returns something different.
+
+This is the part that surprises people, so to be plain about it: within an epoch, **an anchored layer's fresh output does not go into the band.** The pinned bytes do. The fresh output is published separately, at the end.
+
+That is what keeps the prefix stable. A layer can change as often as it likes and the cacheable front of the window does not move.
+
+## Publishing changes
+
+Every anchored layer whose output drifted from its pin is gathered into a single `developer` message, placed after the live band:
+
+```
+<context_updates epoch="t:thread-1#3">
+These supersede the blocks with the same layer id earlier in this context.
+Where they disagree, these are correct.
+<update layer="plan" action="replace">Step 3 is done; step 4 is in progress.</update>
+<update layer="notes" action="retract">This block no longer applies. Disregard it.</update>
+<update layer="facts" action="add">The user prefers metric units.</update>
+</context_updates>
+```
+
+One message, however many layers changed. Three kinds of update:
+
+| Action | When |
+| --- | --- |
+| `replace` | The layer's content changed. |
+| `retract` | The layer produced nothing this turn, so its pinned block no longer applies. |
+| `add` | A layer appeared mid-epoch and cannot be spliced into a frozen prefix. |
+
+A retraction repeats every turn for the rest of the epoch. That is deliberate — the stale block is still sitting in the band, so the correction has to stand as long as it does. Dropping the block instead would shorten the prefix and cost far more cache than the repeated sentence saves.
+
+### Compact updates with `renderDelta`
+
+By default a change republishes the layer's full new content. Always correct, but wasteful when the payload is large and the change is small.
+
+A layer can describe its own change instead:
+
+```ts
+declare function loadCatalog(): Promise<string>;
+
+/** Splits a rendered block into one entry per `## <path>` heading. */
+function byPath(items: ReadonlyArray<Item>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const item of items) {
+    if (item.type !== 'message' || !('content' in item)) continue;
+    for (const part of item.content ?? []) {
+      if (!('text' in part) || typeof part.text !== 'string') continue;
+      for (const chunk of part.text.split(/\n(?=## )/)) {
+        const heading = chunk.match(/^## (.+)$/m);
+        if (heading?.[1]) out.set(heading[1].trim(), chunk.trim());
+      }
+    }
+  }
+  return out;
+}
+
+const catalog: ContextLayer = {
+  id: 'catalog',
+  slot: 350,
+  scope: 'thread',
+  placement: 'anchor',
+  hooks: {
+    async recall() {
+      return loadCatalog();
+    },
+    async renderDelta({ prev, next }) {
+      const before = byPath(prev);
+      const after = byPath(next);
+      const changed = [...after].filter(([path, body]) => before.get(path) !== body);
+      if (changed.length === 0) {
+        return null;
+      }
+      return changed.map(([, body]) => body).join('\n\n');
+    },
+  },
+};
+```
+
+Return `null` to fall back to a full republish. A hook that throws or hangs falls back too — a supersede is a correctness obligation, so it is never skipped because a hook misbehaved.
+
+Worth implementing only when the payload is large and its changes are small. The built-in `fileReference` layer does it: one changed file out of twelve costs one file, not twelve.
+
+## Re-anchoring
+
+Pins are refreshed and supersedes dropped only when the cache is already lost, so re-anchoring costs nothing:
+
+| Reason | Trigger |
+| --- | --- |
+| `cold-start` | First assembly for this conversation |
+| `instructions-changed` | The system prompt differs |
+| `cache-miss` | The model reported the prefix was not cached |
+| `delta-pressure` | Supersedes outgrew the band they patch |
+| `delta-overflow` | A change could not be described |
+| `max-age` | The epoch hit `maxEpochAssemblies` |
+
+`cache-miss` reads the model's own token report — specifically the **first** round of a call, since later rounds replay the same view and would hit cache whatever the first round did. A provider that reports no cache figures, or misses persistently, is marked blind and stops being consulted.
+
+## Asking for the cache
+
+A stable prefix is necessary but not sufficient. **Anthropic caching is opt-in**: without a `cache_control` breakpoint it caches nothing, however byte-identical the prefix is. Measured against live models sending the same prefix twice:
+
+| Model | With the breakpoint | Without |
+| --- | --- | --- |
+| `anthropic/claude-haiku-4.5` | 18,922 of 18,925 cached | **0** |
+| `moonshotai/kimi-k3` | 14,336 cached | — |
+| `deepseek/deepseek-v4-flash` | 16,896 cached | **0** |
+| `openai/gpt-5.2`, `gpt-5.4` | unchanged | unchanged |
+| `z-ai/glm-5`, `glm-5.2` | unchanged | unchanged |
+
+So Noetic sends the directive on every request while anchoring is on. Providers that cache on their own ignore it; the three that need it get it; none reject it.
+
+It is tied to anchoring rather than sent unconditionally because a cache **write** costs more than a plain read — 1.25× input on Anthropic, against 0.1× for a read. The breakpoint only pays off when something is deliberately holding the prefix still, which is what anchoring does.
+
+## Seeing what it did
+
+`lastLayerUsage` reports how each layer was banded and how often it changes:
+
+```ts
+function reportAnchoring(ctx: Context): void {
+  const usage = ctx.lastLayerUsage;
+  for (const layer of usage?.layers ?? []) {
+    console.log(layer.layerId, layer.placement, layer.served, layer.churnRate);
+  }
+  console.log(usage?.epoch?.anchorTokens, usage?.epoch?.reanchorReason);
+}
+```
+
+`churnRate` is the share of assemblies in which a layer's output changed. `rebillTokens` estimates what those changes would have cost had the layer not been pinned — the number that tells you which layer is worth moving to the live band or giving a `renderDelta`.
+
+The same figures are stamped on the step's span as `noetic.context.*` attributes. See [Observability](/docs/framework/observability).
+
+## Tuning
+
+```ts
+new AgentHarness({
+  name: 'assistant',
+  params: {},
+  contextCache: {
+    maxEpochAssemblies: 100,
+  },
+});
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch. Off restores the pre-band layout and stops sending the breakpoint. |
+| `minCachedTokens` | `100` | Below this on the first round, treat the prefix as missed. |
+| `minEpochAssemblies` | `2` | Assemblies before cache figures are judged. |
+| `maxEpochAssemblies` | `50` | Hard ceiling on epoch length. |
+| `deltaBudgetFraction` | `0.15` | Re-anchor once supersedes exceed this share of the anchor band. |
+| `autoDemoteChurn` | `0.5` | An `'auto'` layer changing at least this often moves live. |
+| `autoPromoteChurn` | `0.2` | An `'auto'` layer changing at most this often moves back to anchor. |
+| `minChurnSamples` | `3` | Assemblies watched before placement moves. |
+| `churnDecay` | `0.5` | Share of churn counters carried across a re-anchor. |
+
+The gap between `autoPromoteChurn` and `autoDemoteChurn` is deliberate. A layer sitting between them keeps the band it has, so one hovering near the boundary does not flip every epoch and undo the stability the bands exist to provide.
+
+## Limits worth knowing
+
+**History overflow ends the benefit.** Once conversation history exceeds its budget, the projector drops from the front, which moves the anchor/history boundary and loses the history part of the cache on every subsequent turn. The `[system][anchor]` prefix still caches. Pair anchoring with [`historyWindow`](/docs/framework/context-layers) to keep the boundary still.
+
+**A layer whose `recall()` returns state is never pinned.** Returning state means the call changed something, so replaying an older render would discard it. The runtime forces such layers into the live band whatever their declared placement — the built-in `steering` layer is the case that drives this, since it drains its pending queue as it renders.
+
+**Placement only moves at epoch boundaries.** An `'auto'` layer that starts churning keeps its band until the next re-anchor, which can be up to `maxEpochAssemblies` assemblies away. Declare `'live'` explicitly if you already know.

@@ -185,7 +185,11 @@ Noetic defines constants following the OpenTelemetry GenAI semantic conventions.
 | `GenAI.REQUEST_MODEL` | `'gen_ai.request.model'` | Model identifier. |
 | `GenAI.USAGE_INPUT_TOKENS` | `'gen_ai.usage.input_tokens'` | Input token count. |
 | `GenAI.USAGE_OUTPUT_TOKENS` | `'gen_ai.usage.output_tokens'` | Output token count. |
+| `GenAI.USAGE_CACHED_INPUT_TOKENS` | `'gen_ai.usage.cached_input_tokens'` | Prompt tokens served from the provider's cache. Set only when the provider reports it. |
+| `GenAI.USAGE_CACHE_WRITE_TOKENS` | `'gen_ai.usage.cache_write_tokens'` | Prompt tokens written into the provider's cache. Set only when the provider reports it. |
 | `GenAI.COST` | `'gen_ai.cost'` | Estimated cost. |
+
+The two cache attributes are **absent**, not zero, when the provider reports nothing — an exporter must not read a missing attribute as "nothing was cached". OpenRouter reports reads only, so `cache_write_tokens` is usually absent there.
 
 ### ToolAttr Constants
 
@@ -224,6 +228,40 @@ import { NoeticAttr } from '@noetic-tools/core';
 
 const runSpan = exporter.getSpansByName('workflow.run')[0];
 const doc = JSON.parse(String(runSpan.attributes.get(NoeticAttr.WORKFLOW_DOCUMENT)));
+```
+
+## Context Anchoring Attributes
+
+`NoeticAttr` also reserves names for the [prompt-cache anchoring](/docs/framework/context-layers#prompt-cache-anchoring) data behind an assembled context window. The runtime does not stamp these itself — use them from a hook or custom exporter so anchoring behaviour lands in your backend under stable keys rather than ad-hoc ones.
+
+| Constant | Value | Description |
+|---|---|---|
+| `NoeticAttr.CONTEXT_EPOCH_ID` | `'noetic.context.epoch.id'` | Id of the anchoring epoch the assembled view belongs to. |
+| `NoeticAttr.CONTEXT_EPOCH_AGE` | `'noetic.context.epoch.age'` | Assemblies served by the current epoch, including this one. |
+| `NoeticAttr.CONTEXT_REANCHOR_REASON` | `'noetic.context.reanchor_reason'` | Why the epoch re-anchored on this assembly, when it did. |
+| `NoeticAttr.CONTEXT_ANCHOR_TOKENS` | `'noetic.context.anchor_tokens'` | Tokens in the anchor band (the cache-stable prefix). |
+| `NoeticAttr.CONTEXT_LIVE_TOKENS` | `'noetic.context.live_tokens'` | Tokens in the live band, rendered after history. |
+| `NoeticAttr.CONTEXT_DELTA_TOKENS` | `'noetic.context.delta_tokens'` | Tokens spent superseding stale anchors. |
+| `NoeticAttr.CONTEXT_LAYER_PLACEMENTS` | `'noetic.context.layer_placements'` | JSON array of `{ id, placement, served }` per contributing layer. |
+| `NoeticAttr.CONTEXT_LAYER_CHURN` | `'noetic.context.layer_churn'` | JSON array of `{ id, rate, rebillTokens }` per contributing layer. |
+
+Every value comes from `ctx.lastLayerUsage` after a model call:
+
+```ts validate=none
+import { NoeticAttr } from '@noetic-tools/core';
+
+const usage = ctx.lastLayerUsage;
+if (usage?.epoch) {
+  ctx.span.setAttribute(NoeticAttr.CONTEXT_EPOCH_ID, usage.epoch.id);
+  ctx.span.setAttribute(NoeticAttr.CONTEXT_EPOCH_AGE, usage.epoch.age);
+  ctx.span.setAttribute(NoeticAttr.CONTEXT_ANCHOR_TOKENS, usage.epoch.anchorTokens);
+  ctx.span.setAttribute(
+    NoeticAttr.CONTEXT_LAYER_PLACEMENTS,
+    JSON.stringify(
+      usage.layers.map((l) => ({ id: l.layerId, placement: l.placement, served: l.served })),
+    ),
+  );
+}
 ```
 
 ## Related Pages

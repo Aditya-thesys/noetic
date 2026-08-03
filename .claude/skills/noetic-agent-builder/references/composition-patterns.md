@@ -350,6 +350,59 @@ const entityMemory: MemoryLayer<EntityState> = {
 };
 ```
 
+## Pattern: Anchoring a Large Layer for the Prompt Cache
+
+A layer whose output is big and mostly stable belongs in the anchor band, ahead of history, where the prompt cache can hold it. Add `renderDelta` so the occasional change costs a few tokens at the end of the view instead of a full republish plus a re-billed window.
+
+```typescript
+const catalogMemory: MemoryLayer<CatalogState> = {
+  id: 'catalog',
+  slot: Slot.RAG,
+  scope: 'thread',
+  placement: 'anchor',
+  hooks: {
+    async init({ storage }) {
+      return { state: (await storage.get<CatalogState>('state')) ?? { entries: {} } };
+    },
+    async recall({ state }) {
+      const body = Object.entries(state.entries)
+        .map(([name, text]) => `## ${name}\n${text}`)
+        .join('\n\n');
+      return body ? `<catalog>\n${body}\n</catalog>` : null;
+    },
+    // Only the entries that moved, not the whole catalog.
+    async renderDelta({ prevState, state }) {
+      const changed = Object.keys(state?.entries ?? {}).filter(
+        (name) => prevState?.entries[name] !== state?.entries[name],
+      );
+      if (changed.length === 0) return null;  // null falls back to a full republish
+      return changed.map((name) => `## ${name}\n${state?.entries[name]}`).join('\n\n');
+    },
+  },
+};
+```
+
+The counterpart: a layer whose `recall()` commits something must be `'live'`, because a pinned replay would throw that commit away. The runtime forces this anyway — declaring it just makes the intent readable.
+
+```typescript
+const feedbackMemory: MemoryLayer<FeedbackState> = {
+  id: 'feedback',
+  slot: Slot.STEERING,
+  scope: 'execution',
+  placement: 'live',
+  hooks: {
+    async init() { return { state: { pending: [] } }; },
+    async recall({ state }) {
+      if (!state.pending.length) return null;
+      // Drains as it renders — non-idempotent, so it can never be replayed.
+      return { items: state.pending.map((t) => createMessage(t, 'developer')),
+               tokenCount: estimateTokens(state.pending.join('\n')),
+               state: { pending: [] } };
+    },
+  },
+};
+```
+
 ## Pattern: Layer Provides
 
 Expose typed data and functions from a layer. Functions are automatically available as LLM tools. Use `memory()` + `InferMemory<>` for end-to-end type safety.

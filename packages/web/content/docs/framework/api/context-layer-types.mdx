@@ -21,6 +21,7 @@ declare interface ContextLayerShape<TState = unknown> {
   provides?: unknown;
   itemSchemas?: unknown;
   rerenderTiming?: 'immediate' | 'batched';
+  placement?: 'anchor' | 'live' | 'auto';
 }
 ```
 
@@ -28,7 +29,7 @@ declare interface ContextLayerShape<TState = unknown> {
 |---|---|---|---|
 | `id` | `string` | yes | Unique layer identifier. |
 | `name` | `string` | no | Human-readable name for debugging and trace output. |
-| `slot` | `number` | yes | Ordering slot (lower = recalled first). Use the [`Slot`](#slot-constants) constants for well-known positions. |
+| `slot` | `number` | yes | Ordering slot (lower = recalled first) within the layer's band. Use the [`Slot`](#slot-constants) constants for well-known positions. |
 | `scope` | `ContextScope` | yes | Persistence boundary. |
 | `budget` | `BudgetConfig` | no | Token budget allocation: a fixed number, a `{ min, max }` range, or `'auto'`. |
 | `hooks` | `ContextLayerHooks<TState>` | yes | Lifecycle callbacks. |
@@ -38,6 +39,21 @@ declare interface ContextLayerShape<TState = unknown> {
 | `provides` | `LayerProvides` | no | Typed data and function declarations exposed on `ctx.context['layerId']`. Function entries are also auto-injected as LLM tools. |
 | `itemSchemas` | `Pick<ItemSchemaExtensions, 'developerMessages' \| 'items'>` | no | Optional item schemas contributed by this layer, primarily for developer-role context items. |
 | `rerenderTiming` | `'immediate' \| 'batched'` | no | Default re-render timing when `onItemAppend` requests a re-render. |
+| `placement` | [`LayerPlacement`](#layerplacement) | no | Which band of the assembled view the layer renders into, and so whether it is pinned for the prompt cache. Defaults to `'auto'`. |
+
+## LayerPlacement
+
+```ts validate=none
+type LayerPlacement = 'anchor' | 'live' | 'auto';
+```
+
+| Value | Description |
+|---|---|
+| `'anchor'` | Renders before history and is pinned for the epoch: the bytes sent on the first assembly are re-sent unchanged until the next re-anchor, and any change is published as a supersede rather than by rewriting the prefix. |
+| `'live'` | Renders after history and is re-rendered freely. Use for content that changes every turn, or whose `recall()` mutates state and so cannot be replayed. |
+| `'auto'` | Default. Starts anchored; the runtime may move it to `'live'` at an epoch boundary once it has watched how often the layer changes. An explicit `'anchor'` or `'live'` is never overridden. |
+
+A layer whose `recall()` returns new state is forced live whatever this field says — see [Prompt Cache Anchoring](/docs/framework/context-layers#prompt-cache-anchoring).
 
 ## ContextScope
 
@@ -89,6 +105,7 @@ interface ContextLayerHooks<TState = unknown> {
   afterModelCall?: (params: AfterModelCallParams<TState>) => Promise<AfterModelCallResult<TState>>;
   onItemAppend?: (params: OnItemAppendParams<TState>) => Promise<OnItemAppendResult<TState>>;
   projectHistory?: (params: ProjectHistoryParams<TState>) => Promise<ProjectHistoryResult>;
+  renderDelta?: (params: RenderDeltaParams<TState>) => Promise<string | null>;
 }
 ```
 
@@ -96,6 +113,7 @@ interface ContextLayerHooks<TState = unknown> {
 - **`beforeToolCall` / `afterModelCall`** are the steering hooks: they return a `SteeringDecision` (allow / deny / guide) plus updated state. A deny surfaces as a `NoeticError` kind `steering_denied`.
 - **`onItemAppend`** runs when input items (user messages, tool outputs) are about to be appended — layers compose in slot order, each receiving the previous layer's output. It can transform, drop, or inject items, and may request a context re-render. Not called for LLM response items (use `store`).
 - **`projectHistory`** projects (caps, transforms) the history portion of the context window once per LLM step. Read-side only — `itemLog` storage is never mutated.
+- **`renderDelta`** is called for an anchored layer whose pinned output has gone stale, to describe the change compactly instead of re-sending the whole block. Return `null` to fall back to the default, which republishes the full new content. Never called for layers in the `'live'` band.
 
 ## Hook Parameter Types
 
@@ -130,6 +148,19 @@ interface ContextLayerHooks<TState = unknown> {
 | `items` | `Item[]` | Items to inject into the prompt |
 | `tokenCount` | `number` | Tokens consumed by the items |
 | `state` | `TState` | Updated state (optional) |
+
+### RenderDeltaParams
+
+| Field | Type | Description |
+|---|---|---|
+| `prev` | `ReadonlyArray<Item>` | The items still pinned in the anchor band — what the model can currently see |
+| `next` | `ReadonlyArray<Item>` | The freshly recalled items that would have replaced them |
+| `prevState` | `TState \| undefined` | The layer state captured when `prev` was pinned. Best-effort: it is held by reference, so a layer that mutates state in place sees the current object rather than a snapshot |
+| `state` | `TState \| undefined` | The layer's current state |
+| `ctx` | `ExecutionContext` | Execution context |
+| `budget` | `number` | Soft token budget for the returned text |
+
+Return the text to publish, or `null` to let the runtime republish the full new content. The hook is bounded by the layer's `recall` timeout (5s by default); a hook that throws or hangs falls back to the default, because a supersede is a correctness obligation and is never skipped.
 
 ### StoreParams
 
@@ -242,6 +273,8 @@ interface ExecutionContext {
 | `onItemAppend` | `number` | Timeout for onItemAppend hook (ms, optional) |
 | `projectHistory` | `number` | Timeout for projectHistory hook (ms, optional) |
 
+`renderDelta` has no entry of its own — it borrows the `recall` timeout, defaulting to 5s.
+
 ## ProjectionPolicy
 
 ```ts validate=none
@@ -261,6 +294,50 @@ interface ProjectionPolicy {
 | `overflow` | `'truncate' \| 'summarize' \| 'sliding_window'` | yes | Strategy when total recall exceeds budget |
 | `overflowModel` | `string` | no | Model for summarization overflow |
 | `windowSize` | `number` | no | Items to keep for sliding window overflow |
+
+## ContextCacheConfig
+
+Tuning for prompt-cache anchoring, passed as `contextCache` on `AgentConfig` / the `AgentHarness` constructor. Every field is optional; the defaults give a layer set with no explicit placements a stable prefix without any configuration.
+
+```ts validate=none
+interface ContextCacheConfig {
+  enabled?: boolean;
+  minCachedTokens?: number;
+  minEpochAssemblies?: number;
+  maxEpochAssemblies?: number;
+  deltaBudgetFraction?: number;
+  autoDemoteChurn?: number;
+  autoPromoteChurn?: number;
+  minChurnSamples?: number;
+  churnDecay?: number;
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | `true` | Master switch over both halves of anchoring. When off, every layer renders before history as it did before bands existed, **and** the `cache_control: { type: 'ephemeral' }` breakpoint is no longer sent — so Claude models, whose caching is opt-in, stop caching at all. A cache write costs more than a read, which is why the breakpoint follows the banding rather than going out on its own. See [Asking for the cache](/docs/framework/context-layers#asking-for-the-cache). |
+| `minCachedTokens` | `number` | `100` | Re-anchor when the first round reports fewer cached tokens than this. Judged against what there was to cache, so a short prompt is not held to a floor it can never reach. |
+| `minEpochAssemblies` | `number` | `2` | Assemblies an epoch must reach before its cache figures are judged. The first assembly after a re-anchor writes the cache rather than reading it. |
+| `maxEpochAssemblies` | `number` | `50` | Assemblies after which an epoch re-anchors regardless of cache figures. |
+| `deltaBudgetFraction` | `number` | `0.15` | Re-anchor once supersedes cost more than this fraction of the anchor band. |
+| `autoDemoteChurn` | `number` | `0.5` | An `'auto'` layer changing at least this often moves to the live band. |
+| `autoPromoteChurn` | `number` | `0.2` | An `'auto'` layer changing at most this often moves back to the anchor band. |
+| `minChurnSamples` | `number` | `3` | Assemblies a layer must be watched for before its placement moves. |
+| `churnDecay` | `number` | `0.5` | Fraction of the churn counters carried across a re-anchor. |
+
+## ReanchorReason
+
+```ts validate=none
+type ReanchorReason =
+  | 'cold-start'
+  | 'instructions-changed'
+  | 'cache-miss'
+  | 'delta-pressure'
+  | 'delta-overflow'
+  | 'max-age';
+```
+
+Why an epoch dropped its pins and anchored again. Surfaced on [`EpochUsage.reanchorReason`](/docs/framework/api/context-types#epochusage) for the assembly that re-anchored. See [Prompt Cache Anchoring](/docs/framework/context-layers#epochs-and-supersedes) for what triggers each one.
 
 ## StorageAdapter
 

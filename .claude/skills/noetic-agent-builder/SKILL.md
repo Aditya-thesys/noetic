@@ -86,6 +86,14 @@ The `@noetic-tools/cli` package provides additional enhanced prompt layers (`pro
 
 Recall can return a `RecallResult` object or a plain `string` (shorthand -- the agent harness wraps it in a developer message).
 
+Recall output is assembled in bands so the prompt cache has a stable prefix to hold:
+
+```
+system | anchor layers | history | live layers | supersedes | tail
+```
+
+A layer's `placement` picks its band -- `'anchor'` (before history, pinned for an epoch; changes are published as a `<context_updates>` supersede at the end rather than by rewriting the prefix), `'live'` (after history, re-rendered every turn), or `'auto'` (default, chosen from observed churn). Slot orders layers within a band. This is on by default, and while it is on the runtime also sends a `cache_control: { type: 'ephemeral' }` breakpoint -- without one Claude models cache nothing however stable the prefix. `contextCache: { enabled: false }` on the harness restores the old single-block layout and drops the breakpoint with it. Declare `'live'` on any layer whose `recall()` returns state -- the runtime forces it live anyway, since a replayed render would discard what the call committed. Full behaviour and tuning: `references/api-reference.md` → Prompt-cache anchoring.
+
 ### Generative UI (OpenUI)
 
 An agent can respond with a *UI* built from components you register, instead of text. This is opt-in via `@noetic-tools/openui` (depends only on context + types; core never imports it). Three composable surfaces:
@@ -199,7 +207,7 @@ Observability:
 3. **Detached spawns use `toolCtx.ctx`** -- always use the parent context, never `harness.createContext()`, to preserve depth tracking and thread/resource IDs
 4. **Token/cost metadata lives on `ctx.lastStepMeta`** -- return values are pure business data
 5. **`until.noToolCalls()` checks the outer loop** -- the inner tool call loop is handled by `callModel`
-6. **Layer slot ordering matters** -- lower slots appear first in the LLM view. Use `Slot` constants
+6. **Placement picks the band, slot orders within it** -- anchored layer output renders before history, live output after it; lower slots come first inside a band. Use `Slot` constants, and set `placement: 'live'` on any layer whose `recall()` mutates state
 7. **Fork paths get cloned state** -- mutations in one path don't affect siblings
 8. **SubprocessAdapter precedence is `detachedSpawn-overrides.subprocess ?? step.subprocess ?? harness.subprocess`** -- reach for a per-step override to run one specific spawn out-of-process while keeping the rest in-process, or a per-call override on `detachedSpawn` to do the same without touching the step definition
 9. **Durability is opt-in and composed of three surfaces** -- `checkpointStore` (parent execution state), `subprocess` adapter durability (live-child manifests), and durable IPC (`DurableOutboundQueue`). Configure the ones you need; absent surfaces are no-ops and the harness degrades gracefully
@@ -218,6 +226,7 @@ For complete builder signatures, context layer APIs, agent harness methods, and 
 | Context layer types | `packages/types/src/types/context-layer.ts` |
 | Patterns | `packages/core/src/patterns/` |
 | Context layers | `packages/context/src/context/layers/` |
+| Prompt-cache anchoring | `packages/context/src/context/cache-anchoring.ts`, `packages/core/src/interpreter/context-assembly.ts` |
 | Generative UI (OpenUI) | `packages/openui/src/` (codec, `openUiSurface`, `fragment`, `/server`) |
 | AgentHarness | `packages/core/src/runtime/agent-harness.ts` |
 | Interpreter | `packages/core/src/interpreter/` |

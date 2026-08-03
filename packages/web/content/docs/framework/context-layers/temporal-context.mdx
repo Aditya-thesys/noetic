@@ -10,6 +10,7 @@ Temporal Memory addresses a failure class that pure recall cannot fix: relative-
 - **Slot**: `80` (`Slot.REMINDER`)
 - **Default scope**: `resource`
 - **Default budget**: `{ min: 0, max: 200 }` (`max: 800` when `injectLedger` is on)
+- **[Placement](/docs/framework/context-layers#prompt-cache-anchoring)**: `'live'` while `groundDateTime` is on (the default) — the `<current_datetime>` block changes every turn. With `groundDateTime: false` it falls back to `'auto'`
 - **Hook timeouts**: `store` and `onItemAppend` both `60000` ms (both run the LLM-backed extraction path)
 
 ## Usage

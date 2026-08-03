@@ -2,7 +2,7 @@
 
 > **Module:** `@noetic-tools/context` (source at `packages/context/src/**`); the `ContextLayer` contract is owned by `@noetic-tools/types` (`packages/types/src/types/context-layer.ts`, also at the `@noetic-tools/types/contract` subpath). Both are re-exported by `@noetic-tools/core`.
 > **Depends On:** `07-context-and-event-log` (ItemLog, Item — type import only), `10-observability` (LayerTraceSpan, trace conventions), `04-spawn` (SpawnOpts — referenced in SpawnParams)
-> **Exports:** `ContextLayer`, `ContextLayerHooks`, `ContextScope`, `BudgetConfig`, `Slot`, `InitParams`, `InitResult`, `RecallParams`, `RecallResult`, `StoreParams`, `StoreResult`, `SpawnParams`, `SpawnResult`, `ReturnParams`, `ReturnResult`, `CompleteParams`, `DisposeParams`, `BeforeToolCallParams`, `BeforeToolCallResult`, `AfterModelCallParams`, `AfterModelCallResult`, `OnItemAppendParams`, `OnItemAppendResult`, `RerenderScope`, `ParentUpdateParams`, `ParentUpdateResult`, `ExecutionOutcome`, `ExecutionContext`, `ScopedStorage`, `StorageAdapter`, `ProjectionPolicy`, `LayerTimeouts`, `LayerProvides`, `LayerDataDecl`, `LayerFunctionDecl`, `ContextConfig`, `InferContext`, `InferContextShape`, `layerData`, `layerFn`, `context`, `storageGetMany`
+> **Exports:** `ContextLayer`, `ContextLayerHooks`, `ContextScope`, `BudgetConfig`, `Slot`, `InitParams`, `InitResult`, `RecallParams`, `RecallResult`, `StoreParams`, `StoreResult`, `SpawnParams`, `SpawnResult`, `ReturnParams`, `ReturnResult`, `CompleteParams`, `DisposeParams`, `BeforeToolCallParams`, `BeforeToolCallResult`, `AfterModelCallParams`, `AfterModelCallResult`, `OnItemAppendParams`, `OnItemAppendResult`, `RerenderScope`, `ParentUpdateParams`, `ParentUpdateResult`, `ExecutionOutcome`, `ExecutionContext`, `ScopedStorage`, `StorageAdapter`, `ProjectionPolicy`, `LayerTimeouts`, `LayerProvides`, `LayerDataDecl`, `LayerFunctionDecl`, `ContextConfig`, `InferContext`, `InferContextShape`, `layerData`, `layerFn`, `context`, `storageGetMany`, `LayerPlacement`, `RenderDeltaParams`, `ContextCacheConfig`, `ContextCacheStore`, `ContextEpoch`, `AnchorPin`, `LayerChurn`, `ReanchorReason`
 
 ## Module Boundary
 
@@ -82,7 +82,17 @@ interface ContextLayer<TState = unknown> {
   recallMode?: 'atomic' | 'eventual';
   provides?: LayerProvides;
   rerenderTiming?: 'immediate' | 'batched';
+  /**
+   * Which band of the assembled view this layer's recall output occupies.
+   * - `'anchor'`: before history, pinned for the epoch (prompt-cache stable).
+   * - `'live'`: after history, re-rendered freely.
+   * - `'auto'` (default): starts anchored; the runtime MAY move it at an epoch
+   *   boundary from observed churn. Explicit values are never overridden.
+   */
+  placement?: LayerPlacement;
 }
+
+type LayerPlacement = 'anchor' | 'live' | 'auto';
 
 type ContextScope =
   | 'thread'
@@ -134,8 +144,11 @@ interface ContextLayerHooks<TState = unknown> {
   onParentUpdate?:  (params: ParentUpdateParams<TState>)         => Promise<ParentUpdateResult<TState> | void>;
   onComplete?:      (params: CompleteParams<TState>)             => Promise<void>;
   dispose?:         (params: DisposeParams<TState>)              => Promise<void>;
+  renderDelta?:     (params: RenderDeltaParams<TState>)          => Promise<string | null>;
 }
 ```
+
+`renderDelta` is called only for an **anchored** layer whose pinned output has gone stale, to describe the change compactly instead of republishing the whole block. Returning `null` — or throwing, or timing out — falls back to republishing the full new content. It is never called for `'live'` layers, which re-render anyway. See **Prompt-Cache Anchoring** below.
 
 `projectHistory` is a read-side hook: it receives the full historical items from `itemLog` and returns a (possibly narrower) projection used as `historyItems` in the next `assembleView` call. Layers compose in slot order, each receiving the output of the previous layer. Storage (`itemLog`, `accumulatedItems`) is never mutated by this hook — see `historyWindow` in spec 12 for the canonical use case.
 
@@ -754,19 +767,138 @@ interface ProjectionPolicy {
 1. Count system prompt tokens
 2. Allocate budgets to layers
 3. Run recall() hooks (atomic in the hot path; eventual from cache)
-4. Assemble: system prompt items (role: system) + layer output items (role: developer) + conversation history items
-5. Conversation history gets remaining budget after layers, with overflow policy applied
-6. Result is Item[] — directly passable to the LLM provider
+4. Band the output: anchored layers (pinned) before history, live layers after,
+   changed anchors gathered into one supersede message (see Prompt-Cache Anchoring)
+5. Assemble: system items | anchor band | history | live band | supersedes | tail
+6. Conversation history gets the remaining budget, with overflow policy applied
+7. Result is Item[] — directly passable to the LLM provider
 ```
+
+---
+
+## Prompt-Cache Anchoring
+
+Provider prompt caches match on a **prefix**: the first changed token invalidates every token after it. Assembling layer output ahead of conversation history therefore puts the most volatile content before the largest stable content, and re-bills the whole window whenever any layer re-renders.
+
+The runtime splits layer output into two bands so that placement follows volatility rather than semantic priority:
+
+```
+[system] [anchor layers, slot asc] [history] [live layers, slot asc] [supersedes] [tail]
+```
+
+`slot` still orders layers **within** a band; `placement` chooses the band. A slot-90 live layer therefore renders after a slot-350 anchored one.
+
+### Epochs
+
+An **epoch** is a run of assemblies sharing a cacheable prefix. Within an epoch the anchor band is **append-only**: each anchored layer's first render is pinned, and those exact items are re-sent on every later assembly even when `recall()` produces something different. The change is published instead as a single `developer` message after the live band:
+
+```
+<context_updates epoch="t:thread-1#3">
+These supersede the blocks with the same layer id earlier in this context.
+Where they disagree, these are correct.
+<update layer="plan" action="replace">…</update>
+<update layer="notes" action="retract">This block no longer applies. Disregard it.</update>
+<update layer="facts" action="add">…</update>
+</context_updates>
+```
+
+Three actions MUST be representable: `replace` (pinned content changed), `retract` (a pinned layer produced nothing this turn — leaving its block standing unmarked would show the model content the runtime knows no longer applies), and `add` (a layer first seen mid-epoch, which cannot be spliced into a frozen prefix).
+
+Layers never see epochs. `recall()` keeps its contract — return the current full content, every turn — and all cache reasoning stays in the runtime.
+
+### Cache Lineage
+
+Epochs are keyed by lineage, not execution: `depth === 0` keys on `threadId`, deeper executions key on their own `executionId`. A session mints a fresh `executionId` per turn, so keying on execution would re-anchor every turn and pin nothing; spawn and fork children inherit their parent's `threadId` but assemble a different view, so they must not inherit its pins.
+
+### Re-anchor Triggers
+
+Re-anchoring refreshes every pin from fresh recall output and drops all supersedes. It happens only when the prefix is already invalid, so it costs nothing:
+
+| Reason | Trigger |
+|---|---|
+| `cold-start` | No epoch for this lineage |
+| `instructions-changed` | Resolved instructions hash differs |
+| `cache-miss` | The model's own token report shows the prefix was not cached |
+| `delta-pressure` | Supersedes outgrew the band they patch |
+| `delta-overflow` | Supersedes no longer fit the window |
+| `max-age` | The epoch reached `maxEpochAssemblies` |
+
+`delta-pressure` and `delta-overflow` are decided during assembly; the rest are decided before it. `cache-miss` is recorded from a response and applied at the **next** assembly, so a response steering later rejects cannot leave the epoch half-rebuilt.
+
+### Asking For The Cache
+
+A stable prefix is necessary but not sufficient. Anthropic caching is **opt-in**: without a `cache_control` breakpoint on the request it caches nothing, however byte-identical the prefix is — measured against live Haiku 4.5 and Sonnet 4.5, which reported zero cached tokens across an 18,925-token identical prefix. OpenAI and Gemini cache on their own and ignore the directive.
+
+The runtime therefore sends `cache_control: { type: 'ephemeral' }` on every model request while anchoring is enabled, and OpenRouter places the breakpoints. The same measurement with the directive in place caches 18,922 of 18,925 tokens from the second turn on.
+
+It is tied to `contextCache.enabled` rather than sent unconditionally because a cache **write** costs more than a plain read (1.25× input on Anthropic, against 0.1× for a read): the breakpoint only pays off when something is deliberately holding the prefix still, which is exactly what anchoring does.
+
+The directive is sent to **every** model rather than only the families that need it. Measured across providers on the Responses API, sending the same identical prefix twice:
+
+| Model | With directive | Without |
+|---|---|---|
+| `anthropic/claude-haiku-4.5` | 18,922 / 18,925 | **0** |
+| `moonshotai/kimi-k3` | 14,336 from turn 2 | — |
+| `deepseek/deepseek-v4-flash` | 16,896 from turn 2 | **0** |
+| `openai/gpt-5.2`, `gpt-5.4` | unchanged | unchanged |
+| `z-ai/glm-5`, `glm-5.2` | unchanged | unchanged |
+| `minimax/minimax-m3` | unchanged | unchanged |
+
+No provider rejected it. Providers that cache on their own are unaffected, so a per-family allowlist would add a maintenance burden and a new way to be wrong without buying anything.
+
+**Placement is API-specific.** On OpenRouter's Responses API only the top-level field takes effect; a `cache_control` attached to a content part — the form OpenRouter documents for chat completions — is ignored. Adapters reaching a provider through a schema-validated SDK will also find the field stripped from the request as an unknown key, so it has to be injected where the request body is final.
+
+### Reading Cache Telemetry
+
+The `cache-miss` trigger reads `LLMResponse.rounds[0]`, and three rules keep it from eating itself:
+
+1. **Only the first round counts.** Later rounds replay the same view plus tool traffic and hit the cache whatever the first round did; summing them hides a total miss behind a busy tool loop.
+2. **Young epochs are spared.** The assembly right after a re-anchor *writes* the cache rather than reading it, so its near-zero read is expected. Nothing is judged before `minEpochAssemblies`.
+3. **The floor scales to what there was to cache** (`min(minCachedTokens, expected * 0.5)`). A short prompt can never reach a fixed floor, and holding it to one would re-anchor forever.
+
+A provider that reports no cache figures — `cachedTokens` absent, not zero — or that misses persistently is marked **cache-blind**, and the trigger stops being consulted. Age and delta pressure still bound the epoch. Adapters MUST preserve the absent/zero distinction rather than defaulting to `0`.
+
+### Placement of `'auto'` Layers
+
+Per-layer content hashes give churn telemetry for free. At an epoch boundary **and only then**, an `'auto'` layer changing at least `autoDemoteChurn` of watched assemblies moves to the live band, and one changing at most `autoPromoteChurn` returns to the anchor band. The gap between the two thresholds is deliberate: a layer sitting between them keeps its current band, so one hovering near the boundary does not flip every epoch and undo the stability the bands exist to provide. Churn counters survive re-anchors, decayed by `churnDecay`, so placement is not relearnt from nothing each time.
+
+### Non-Idempotent Recall
+
+A layer whose `recall()` returns state has committed a change as it rendered and MUST NOT be pinned — replaying an earlier render would discard the very thing that call committed. The runtime flags such output (`RecallLayerOutput.mutatedState`) and forces it to the live band regardless of declared placement. The built-in `steering` layer is the canonical case: it drains its pending queue as it renders.
+
+### Configuration
+
+```typescript
+interface ContextCacheConfig {
+  enabled?: boolean;              // default true
+  minCachedTokens?: number;       // default 100
+  minEpochAssemblies?: number;    // default 2
+  maxEpochAssemblies?: number;    // default 50
+  deltaBudgetFraction?: number;   // default 0.15
+  autoDemoteChurn?: number;       // default 0.5
+  autoPromoteChurn?: number;      // default 0.2
+  minChurnSamples?: number;       // default 3
+  churnDecay?: number;            // default 0.5
+}
+```
+
+Set on the harness as `contextCache`. Anchoring is **on by default**; `enabled: false` renders every layer before history, as it did before bands existed.
+
+### Limitation: History Overflow
+
+Once conversation history exceeds its budget, the projector drops from the front, which moves the anchor/history boundary and loses the history portion of the cache on every subsequent turn. The `[system][anchor]` prefix still caches. Pair anchoring with `historyWindow` (spec 12) to keep the boundary still.
 
 ### Hard Token Cap (`assembleView`)
 
 Given a `ProjectionPolicy`, `assembleView` holds the assembled view to a hard budget of `policy.tokenBudget − policy.responseReserve`, in priority order:
 
 1. **System items are always kept** — they anchor the conversation and are never dropped.
-2. **Layer output is considered slot-ascending; non-fitting items are dropped individually.** Layer-output items are independent contributions with no contiguity requirement, so an item that exceeds the remaining budget is skipped while later (higher-slot) items that still fit are kept. Lower-slot (foundational) output gets first claim on the budget, and higher-slot output is dropped first when space is tight — but a single oversized item never evicts everything after it.
-3. **History takes the remainder, keeping the most recent turns.** Older items are dropped first; an optional `windowSize` caps item count before the token pass (sliding-window overflow).
-4. **Orphan tool calls are stripped** at the slice boundary — any dangling `function_call` / `function_call_output` left after trimming history is removed.
+2. **The anchor band is considered slot-ascending; non-fitting items are dropped individually.** Layer-output items are independent contributions with no contiguity requirement, so an item that exceeds the remaining budget is skipped while later (higher-slot) items that still fit are kept. Lower-slot (foundational) output gets first claim on the budget, and higher-slot output is dropped first when space is tight — but a single oversized item never evicts everything after it.
+3. **The live band claims next**, by the same rule.
+4. **The tail is always kept.** It carries steering guidance — the correction a retry exists to deliver — so the budget never drops it.
+5. **Supersedes are never dropped, and claim ahead of history.** Each one corrects a pinned block that is already in the view, so dropping it would leave the model reading content the runtime knows is stale — silent corruption, and worse than losing a turn of history. History absorbs the cost; `deltaBudgetFraction` keeps the supersedes from growing large enough for that to matter.
+6. **History takes the remainder, keeping the most recent turns.** Older items are dropped first; an optional `windowSize` caps item count before the token pass (sliding-window overflow).
+7. **Orphan tool calls are stripped** at the slice boundary — any dangling `function_call` / `function_call_output` left after trimming history is removed.
 
 Without a `policy`, the inputs are concatenated as-is (optionally sliding the history window by `windowSize`).
 
@@ -790,6 +922,7 @@ The ItemLog's rendering is handled by the Projector natively. Context layers get
 | `onReturn`        | Error **logged**. Parent state unchanged.                               |
 | `onComplete`      | Error **logged**.                                                       |
 | `dispose`         | Error **logged**. Must not prevent other layer cleanup.                 |
+| `renderDelta`     | Falls back to republishing the layer's full new content. A supersede is a correctness obligation and is never skipped because a hook misbehaved. |
 
 ### Timeouts
 

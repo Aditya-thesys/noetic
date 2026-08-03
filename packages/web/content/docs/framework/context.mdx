@@ -84,8 +84,13 @@ interface TokenUsage {
   input: number;
   output: number;
   total: number;
+  cached?: number;
 }
 ```
+
+`cached` accumulates the prompt tokens providers served from their cache across the execution. Per-round counts live on `ctx.lastStepMeta.usage`, which also carries `cacheWriteTokens` — the tokens written *into* the cache — whenever the provider reports it.
+
+Both cache fields are `undefined` — not `0` — when nothing was reported, and the two mean different things: absent is "the provider said nothing", zero is "the provider said nothing was cached". The re-anchor logic reads the distinction, so keep it if you write an adapter. Treat a missing `cacheWriteTokens` as no answer rather than no write: the streaming path used for ordinary calls does not surface writes today, so it is `undefined` there even on a turn that wrote the cache.
 
 ## Item Log
 
@@ -271,7 +276,7 @@ declare const ctx: Context;
 const usage = ctx.lastLayerUsage;
 if (usage) {
   for (const layer of usage.layers) {
-    console.log(`${layer.layerId}: ${layer.tokenCount} tokens`);
+    console.log(`${layer.layerId}: ${layer.tokenCount} tokens (${layer.placement}, ${layer.served})`);
   }
   console.log(`system: ${usage.systemPromptTokens}, history: ${usage.historyTokens}`);
 }
@@ -279,7 +284,40 @@ if (usage) {
 
 Each entry's `tokenCount` is self-reported by the layer's `recall()` output; `systemPromptTokens`, `toolsTokens`, and `historyTokens` are estimates derived from the rendered request. The sum is `totalUsedTokens`. The same snapshot is also surfaced on `HarnessResponse.lastLayerUsage` so external callers (CLIs, dashboards) can read it after the run completes without holding a Context reference.
 
-See [Context Types](/docs/framework/api/context-types) for the `LastLayerUsage` and `LayerUsageEntry` interfaces.
+### Anchoring fields
+
+Each entry also reports what [prompt-cache anchoring](/docs/framework/context-layers#prompt-cache-anchoring) did with the layer:
+
+| Field | Type | Description |
+|---|---|---|
+| `placement` | `'anchor' \| 'live'` | The band the layer rendered into. This is the *resolved* band, so an `'auto'` layer reports where it actually landed. |
+| `served` | `'fresh' \| 'pinned'` | `'pinned'` when the items are a replay of an earlier render, held byte-stable for the prompt cache. |
+| `changed` | `boolean` | Whether the layer's fresh output differed from its pin, and so was superseded this turn. |
+| `churnRate` | `number` | Share of watched assemblies in which the layer's output changed, 0–1. Drives `'auto'` placement. |
+| `rebillTokens` | `number` | Tokens the layer's changes would have re-billed had it not been pinned — what anchoring saved. |
+
+The snapshot's `epoch` field covers the assembly as a whole. It is absent when `contextCache.enabled` is `false`.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Identifies the current run of assemblies sharing one set of pins. |
+| `age` | `number` | Assemblies served by this epoch, including the one just made. |
+| `anchorTokens` | `number` | Tokens in the anchor band — the cache-stable prefix. |
+| `liveTokens` | `number` | Tokens in the live band, rendered after history. |
+| `deltaTokens` | `number` | Tokens spent superseding stale anchors. |
+| `reanchorReason` | `ReanchorReason \| undefined` | Set only on an assembly that re-anchored. |
+
+```ts
+declare const ctx: Context;
+const epoch = ctx.lastLayerUsage?.epoch;
+if (epoch?.reanchorReason) {
+  console.log(`re-anchored: ${epoch.reanchorReason} (epoch ${epoch.id})`);
+}
+```
+
+An `age` that never climbs past 1 means every turn is re-anchoring — read `reanchorReason` to find out why.
+
+See [Context Types](/docs/framework/api/context-types) for the `LastLayerUsage`, `LayerUsageEntry`, and `EpochUsage` interfaces.
 
 ## Related Pages
 

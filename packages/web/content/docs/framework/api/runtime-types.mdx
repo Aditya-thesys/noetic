@@ -247,6 +247,9 @@ declare interface AgentConfigShape<
   params: TParams;
   itemSchemas?: unknown;
   strictItemSchemas?: boolean;
+  projection?: ProjectionPolicy;
+  forceAtomicRecall?: boolean;
+  contextCache?: unknown;
 }
 ```
 
@@ -258,6 +261,9 @@ declare interface AgentConfigShape<
 | `params` | `TParams` | yes | Arbitrary key-value parameters available to every step and tool via `ctx.harness.config.params`. |
 | `itemSchemas` | `ItemSchemaExtensions` | no | Harness-wide item-schema extensions used to validate emitted and returned items. Global by design; tool-contributed `toolResults` schemas are owner-scoped to each tool's own result items. Extension schemas are gates, not normalizers — the original item is returned on match. Mismatches raise `NoeticError` kind `item_schema_mismatch`. |
 | `strictItemSchemas` | `boolean` | no | Whether unknown extension item types must match a registered schema. Defaults to `true`. |
+| `projection` | `ProjectionPolicy` | no | Default projection policy for all LLM steps. Individual steps override it via `step.projection`. |
+| `forceAtomicRecall` | `boolean` | no | Recall every layer atomically regardless of its `recallMode`, disabling cached/eventual recall. |
+| `contextCache` | [`ContextCacheConfig`](/docs/framework/api/context-layer-types#contextcacheconfig) | no | Tuning for prompt-cache anchoring. On by default; pass `{ enabled: false }` to render every layer before history as it did before bands existed. |
 
 ## AgentHooks
 
@@ -321,6 +327,7 @@ interface RecallLayerOutput {
   layerId: string;
   items: Item[];
   tokenCount: number;
+  mutatedState?: boolean;
 }
 ```
 
@@ -329,22 +336,29 @@ interface RecallLayerOutput {
 | `layerId` | `string` | Which layer produced this output |
 | `items` | `Item[]` | Items to inject into the prompt |
 | `tokenCount` | `number` | Token cost of the items |
+| `mutatedState` | `boolean` | Set when the layer's `recall` returned new state. Such a layer is never pinned for the prompt cache — serving an older render would drop what the call committed |
 
 ## LLMResponse
 
 The response from an LLM call.
 
 ```ts validate=none
+interface RoundUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens?: number;
+  cacheWriteTokens?: number;
+}
+
 interface LLMResponse {
   items: Item[];
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedTokens?: number;
-  };
+  usage: RoundUsage;
+  rounds?: ReadonlyArray<RoundUsage>;
   cost?: number;
 }
 ```
+
+`usage` totals every round of the call. `rounds` breaks it down oldest first: rounds after the first replay the same assembled view plus appended tool traffic, so they hit the prompt cache regardless of whether the first round did — only `rounds[0]` answers "was my prefix cached?". `cachedTokens` and `cacheWriteTokens` are `undefined`, not `0`, when the provider reports no cache figures at all.
 
 | Field | Type | Description |
 |---|---|---|

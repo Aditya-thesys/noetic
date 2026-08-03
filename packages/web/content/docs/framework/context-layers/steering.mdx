@@ -10,6 +10,7 @@ The Steering layer evaluates rules at the two enforcement points the runtime exp
 - **Slot**: `90` (`Slot.STEERING`) — runs before all other layers so policy enforcement precedes side effects
 - **Default scope**: `execution`
 - **Default budget**: `{ min: 0, max: 500 }` (recall only emits queued async feedback)
+- **[Placement](/docs/framework/context-layers#prompt-cache-anchoring)**: `'live'` — `recall` drains the feedback queue as it renders, so the call cannot be replayed from a pin
 - **Hook timeouts**: `beforeToolCall` `5000` ms, `afterModelCall` `10000` ms
 
 ## Usage

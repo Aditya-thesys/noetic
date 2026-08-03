@@ -11,6 +11,7 @@ The File Reference layer watches user messages for `#path/to/file.ts`-style refe
 - **Scope**: `thread`
 - **Budget**: `'auto'`
 - **Re-render timing**: `immediate`
+- **[Placement](/docs/framework/context-layers#prompt-cache-anchoring)**: `'anchor'` — a large payload that changes one file at a time. The layer implements `renderDelta`, so a change publishes only the files that moved plus a note of any no longer referenced, instead of republishing the whole set
 - **Hook timeouts**: `onItemAppend` `30000` ms — it reads files *and* runs an LLM scoring call per new reference, so the 5s pipeline default would silently drop the transform
 
 ## Usage

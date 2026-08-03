@@ -163,12 +163,46 @@ const timeouts: Partial<LayerTimeouts> = {
 
 Timeouts exist for every hook, including `beforeToolCall`, `afterModelCall`, `onItemAppend`, and `projectHistory`.
 
-### Failure and recall modes
+### Failure, recall, and placement
 
-Two top-level fields tune how the runtime treats your layer:
+Three top-level fields tune how the runtime treats your layer:
 
 - **`onInitError`** — what happens when `init` throws (or times out). The default `'throw'` aborts the execution: context is load-bearing, and silently dropping a layer hides failures. Set `'disable'` only for genuinely non-critical layers; the runtime then logs a diagnostic and skips the layer's hooks for the run.
 - **`recallMode`** — `'atomic'` (default) runs `recall()` in the hot path before every model call. Set `'eventual'` for expensive recalls that can tolerate staleness: recall is served from a cache that refreshes after `store()`, so the next turn sees the update and the model call is never blocked. A harness configured with `forceAtomicRecall` overrides this and treats every layer as atomic.
+- **`placement`** — which band of the context window your output renders into: `'anchor'` (before history, pinned for the prompt cache), `'live'` (after history, re-rendered every turn), or `'auto'` (default), which starts anchored and lets the runtime move it based on how often your output changes. See [Prompt Cache Anchoring](/docs/framework/context-layers#prompt-cache-anchoring).
+
+Leave `placement` at `'auto'` unless you know something the runtime cannot observe. Two cases are worth an explicit value:
+
+- Set `'anchor'` for a large payload that rarely changes — a loaded instruction file, a tracked file set. Churn takes a few turns to learn, and the anchor band is where the saving is.
+- Set `'live'` when your output is genuinely different every turn — a clock, a queue drain, a per-turn reminder. Pinning it would just produce a supersede every turn.
+
+If your `recall()` returns new `state`, the runtime treats the call as non-repeatable and renders the layer live regardless of `placement` — replaying an older render would discard what that call committed.
+
+### Describing a change compactly with `renderDelta`
+
+An anchored layer's pinned output is re-sent unchanged until the epoch ends. When your fresh `recall()` output stops matching the pin, the runtime publishes the difference as one `<context_updates>` developer message after history. By default it republishes your whole new block there — correct, but expensive when the block is large and the change is small.
+
+Implement `renderDelta` to describe the change yourself:
+
+```ts validate=none
+import type { ContextLayer } from '@noetic-tools/core';
+
+const myLayer: ContextLayer<MyLayerState> = {
+  id: 'my-custom-layer',
+  slot: 275,
+  scope: 'thread',
+  placement: 'anchor',
+  hooks: {
+    async renderDelta({ prev, next }) {
+      const added = entriesOf(next).filter((e) => !entriesOf(prev).includes(e));
+      if (!added.length) return null; // fall back to a full republish
+      return `Added: ${added.join(', ')}`;
+    },
+  },
+};
+```
+
+Return `null` when you cannot summarise the change — the runtime republishes in full. The hook is only worth writing when the payload is large and its changes are small; `fileReference` uses it to send the one file that changed instead of the whole set.
 
 ## Step 7: Register with the Agent
 
@@ -221,6 +255,19 @@ State written by **any** path — `store()` hooks, `provides` functions, `onComp
 | `ctx` | `ExecutionContext` |
 | `state` | `TState` |
 | `budget` | `number` |
+
+### RenderDeltaParams
+
+| Field | Type |
+|---|---|
+| `prev` | `ReadonlyArray<Item>` |
+| `next` | `ReadonlyArray<Item>` |
+| `prevState` | `TState \| undefined` |
+| `state` | `TState \| undefined` |
+| `ctx` | `ExecutionContext` |
+| `budget` | `number` |
+
+`prevState` is held by reference, not snapshotted — a layer that mutates its state in place sees the current object here.
 
 ### StoreParams
 

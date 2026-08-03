@@ -186,6 +186,7 @@ function temporalMemory(config?: TemporalMemoryConfig): MemoryLayer<TemporalStat
 |----------|-------|
 | **id** | `'temporal'` |
 | **slot** | `Slot.REMINDER` (80) |
+| **placement** | `'live'` when `groundDateTime`, else `'auto'` — the `<current_datetime>` block changes every turn by construction, so anchoring it would re-bill the window each time. With grounding off only the slow-moving ledger remains, which is worth anchoring. |
 | **scope** | `config.scope ?? 'resource'` |
 | **budget** | `{ min: 0, max: config.injectLedger ? 800 : 200 }` |
 | **timeouts** | `{ store: 60_000, onItemAppend: 60_000 }` (both hooks run the LLM-backed extraction path) |
@@ -354,6 +355,7 @@ function steering(config: SteeringConfig): MemoryLayer<SteeringState>
 |----------|-------|
 | **id** | `'steering'` |
 | **slot** | `Slot.STEERING` (90) |
+| **placement** | `'live'` (mandatory) — `recall` drains the pending queue as it renders, so its output can never be replayed from a pin. Rendering after history also puts guidance where the model weighs it most. |
 | **scope** | `'execution'` |
 | **budget** | none (this layer does not participate in `recall`) |
 | **hooks** | `beforeToolCall`, `afterModelCall` |
@@ -589,6 +591,22 @@ Potential extensions to `durableTaskState()`: a configurable on-disk fallback (`
 
 ---
 
+## Declared Placements
+
+Only layers whose volatility is known up front declare a `placement` (spec 11, Prompt-Cache Anchoring). The rest are left `'auto'`, because how often they change depends on the workload, and the runtime decides from what it observes.
+
+| Layer | Placement | Why |
+|---|---|---|
+| `steering()` | `'live'` | `recall` drains its queue as it renders — a pin would lose the feedback |
+| `temporalMemory()` | `'live'` while grounding the clock, else `'auto'` | `<current_datetime>` changes every turn by construction |
+| `staticContent()` | `'anchor'` | Loaded once in `init`, never rewritten |
+| `fileReference()` | `'anchor'` + `renderDelta` | Large payload, changes a file at a time — the case anchoring pays off most on |
+| everything else | `'auto'` | Workload-dependent; let observed churn decide |
+
+`historyWindow()` declares none: it contributes only `projectHistory` and never enters either band.
+
+---
+
 ## Checklist for Custom Layer Authors
 
 1. Pick a unique `id`. Namespace it: `'mycompany/layer-name'`.
@@ -601,3 +619,4 @@ Potential extensions to `durableTaskState()`: a configurable on-disk fallback (`
 8. Version your state if you plan to evolve the schema.
 9. Clean up in `dispose()`. Close connections, cancel subscriptions.
 10. Test with the layer disabled. Your agent should work (degraded) without any single layer.
+11. Leave `placement` unset unless you know the layer's volatility. Declare `'live'` if `recall()` changes state or re-renders every turn; declare `'anchor'` only if the content genuinely cannot change mid-session. Add `renderDelta` only when the payload is large and its changes are small.
