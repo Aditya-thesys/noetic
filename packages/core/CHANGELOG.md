@@ -1,3 +1,7 @@
+## @noetic-tools/core-v5.3.0 (2026-08-03)
+
+* feat(core): anchor the prompt prefix and ask providers to cache it ([77d7685](https://github.com/mattapperson/noetic/commit/77d7685))
+
 ## @noetic-tools/core-v5.2.0 (2026-08-03)
 
 * feat(context): rebuild the plan-mode briefing and hold recall to its budget ([4ea86e1](https://github.com/mattapperson/noetic/commit/4ea86e1))
