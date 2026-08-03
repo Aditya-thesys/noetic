@@ -16,7 +16,7 @@ If you're new to the primitives, read [Operators](/docs/framework/operators) and
 
 ## Plan-mode workflow documents
 
-When the agent is in **plan mode** (`/plan` or `/mode plan`), it authors the plan as a `WorkflowDocument` — the same format the [JSON Workflow Runtime](/docs/framework/json-runtime) executes, validated against the published schema at `https://noetic.tools/schema/noetic-workflow.schema.json`. The [plan memory layer](/docs/framework/memory/plan-memory) stores the reviewed tree via `plan/setPlanTree` plus any **named workflows** via `plan/setWorkflow`, and the tree references them with `subflow` nodes so the part a human approves stays small.
+When the agent is in **plan mode** (`/plan` or `/mode plan`), it authors the plan as a `WorkflowDocument` — the same format the [JSON Workflow Runtime](/docs/framework/json-runtime) executes, validated against the published schema at `https://noetic.tools/schema/noetic-workflow.schema.json`. The [plan context layer](/docs/framework/context-layers/plan-context) stores the reviewed tree via `plan/setPlanTree` plus any **named workflows** via `plan/setWorkflow`, and the tree references them with `subflow` nodes so the part a human approves stays small.
 
 All the runtime's node kinds are available — `llm`, `tool`, `sequence`, `fork`, `branch`, `loop`, `spawn`, `provide`, `every`, `subflow`, and the coding-agent kinds (`claude-code`, `codex`, `opencode`, `pi`). See the [node-kind reference](/docs/framework/json-runtime#node-kinds) for each shape. Hosts can narrow the allowed set with `PlanMemoryConfig.allowedNodeKinds`.
 

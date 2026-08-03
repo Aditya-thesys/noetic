@@ -554,7 +554,7 @@ Throws `NoeticConfigError` with code `UNKNOWN_NODE_KIND` if a node kind is unrec
 
 ## Plans as Workflows
 
-The [plan memory layer](/docs/framework/memory/plan-memory) authors plans directly in this format: the reviewed plan tree is a `WorkflowDocument`, and the plan's named workflows feed the `workflows` registry. Composition also works from code — `step.workflow` runs a document (inline or by `ref`) as a single composable step:
+The [plan context layer](/docs/framework/context-layers/plan-context) authors plans directly in this format: the reviewed plan tree is a `WorkflowDocument`, and the plan's named workflows feed the `workflows` registry. Composition also works from code — `step.workflow` runs a document (inline or by `ref`) as a single composable step:
 
 ```ts validate=none
 import { step } from '@noetic-tools/core';
