@@ -1,3 +1,7 @@
+## @noetic-tools/types-v3.1.0 (2026-08-03)
+
+* feat(types): add context-layer placement, renderDelta, and cache-anchoring types ([c7f53b4](https://github.com/mattapperson/noetic/commit/c7f53b4))
+
 ## @noetic-tools/types-v3.0.0 (2026-08-02)
 
 * feat(core): add chat-sdk.dev integration and external channel read surface (#66) ([793f441](https://github.com/mattapperson/noetic/commit/793f441)), closes [#66](https://github.com/mattapperson/noetic/issues/66)
