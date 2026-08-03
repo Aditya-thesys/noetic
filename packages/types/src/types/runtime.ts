@@ -2,6 +2,7 @@ import type { ZodType } from 'zod';
 import type { Channel, ChannelHandle, ExternalChannel } from './channel';
 import type { LLMResponse, ModelParams, ServerToolSpec } from './common';
 import type { Context, CwdState, RestoreContextOptions } from './context';
+import type { ContextCacheConfig, ContextCacheStore } from './context-cache';
 import type { ContextData, ContextLayer, ProjectionPolicy, StorageAdapter } from './context-layer';
 import type { DetachedHandle } from './detached';
 import type { FsAdapter } from './fs-adapter';
@@ -34,6 +35,8 @@ export interface AgentConfig<TParams extends Record<string, unknown> = Record<st
   projection?: ProjectionPolicy;
   /** When true, every layer is recalled atomically regardless of its `recallMode` (no eventual/cached recall). */
   forceAtomicRecall?: boolean;
+  /** Tuning for prompt-cache anchoring. See `ContextCacheConfig` for the defaults. */
+  contextCache?: ContextCacheConfig;
 }
 
 //#region Delivery Mode
@@ -301,6 +304,13 @@ export interface AgentHarnessContract<
    * iterable owns a single iterator; subscribe again for a second consumer.
    */
   getChannelStream<T>(channel: ExternalChannel<T>, executionId: string): AsyncIterable<T>;
+  /**
+   * Pinned anchor output and epoch bookkeeping for prompt-cache anchoring,
+   * shared by every thread on this harness. Optional so a hand-written harness
+   * stays valid: without it nothing is pinned across turns and layers render
+   * fresh every time, as they did before anchoring existed.
+   */
+  readonly contextCache?: ContextCacheStore;
   initLayers(layers: ContextLayer[], ctx: Context, storage: StorageAdapter): Promise<void>;
   recallLayers(layers: ContextLayer[], input: string, ctx: Context): Promise<RecallLayerOutput[]>;
   /** Recall only atomic layers (or all layers when the harness forces atomic recall). Blocks until complete. */
@@ -399,6 +409,13 @@ export interface RecallLayerOutput {
   layerId: string;
   items: Item[];
   tokenCount: number;
+  /**
+   * Set when the layer's `recall` returned new state, meaning the call changed
+   * something and cannot be replayed. Such a layer is never pinned — serving an
+   * older render would drop the very thing the call committed (the steering
+   * layer, for one, drains its queue as it renders).
+   */
+  mutatedState?: boolean;
 }
 
 /** @public A request to re-render the context window, collected from onItemAppend hooks. */

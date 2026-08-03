@@ -2,6 +2,7 @@ import type { ZodType } from 'zod';
 import type { ItemSchemaRegistry } from '../schemas/item';
 import type { Channel, ChannelHandle, ExternalChannel } from './channel';
 import type { LLMResponse, ModelParams, StepMeta, TokenUsage } from './common';
+import type { ContextCacheConfig, ContextCacheStore } from './context-cache';
 import type { ContextData, ContextLayer, ProjectionPolicy, StorageAdapter } from './context-layer';
 import type { ItemLog } from './context-parts/item-log';
 import type { LastLayerUsage } from './context-parts/layer-usage';
@@ -150,6 +151,8 @@ export interface ContextHarness {
     readonly params: Record<string, unknown>;
     /** Harness-wide default projection policy; a step's `projection` overrides it. */
     readonly projection?: ProjectionPolicy;
+    /** Tuning for prompt-cache anchoring. */
+    readonly contextCache?: ContextCacheConfig;
   };
   readonly fs: FsAdapter;
   readonly shell: ShellAdapter;
@@ -199,6 +202,8 @@ export interface ContextHarness {
     items: import('./items').Item[],
     ctx: Context,
   ): Promise<ContextAppendPipelineResult>;
+  /** Pinned anchor output and epoch bookkeeping for prompt-cache anchoring. Absent on a harness that predates it. */
+  readonly contextCache?: ContextCacheStore;
   recallLayers(
     layers: ContextLayer[],
     input: string,

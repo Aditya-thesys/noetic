@@ -229,6 +229,44 @@ export interface StoreResult<TState> {
   state: TState;
 }
 
+/**
+ * @public Which band of the assembled view a layer's recall output sits in.
+ *
+ * Prompt caches match on a prefix, so a layer that re-renders every turn
+ * invalidates everything after it. The bands let stable content sit ahead of
+ * conversation history where it can be cached, and volatile content sit after
+ * it where re-rendering is nearly free.
+ *
+ * - `'anchor'` — before history. Pinned for the epoch: the bytes sent on the
+ *   first assembly are re-sent unchanged until the next re-anchor, and any
+ *   change is published as a supersede instead of rewriting the prefix.
+ * - `'live'` — after history. Re-rendered freely. Use for content that changes
+ *   every turn, or whose `recall()` mutates state and so cannot be replayed.
+ * - `'auto'` (default) — starts anchored; the runtime may move it to `'live'`
+ *   at an epoch boundary once it has watched how often the layer changes.
+ *   An explicit `'anchor'` or `'live'` is never overridden.
+ */
+export type LayerPlacement = 'anchor' | 'live' | 'auto';
+
+/** @public Parameters passed to a context layer's `renderDelta` hook when its pinned output goes stale. */
+export interface RenderDeltaParams<TState = unknown> {
+  /** The items still pinned in the anchor band — what the model can currently see. */
+  prev: ReadonlyArray<Item>;
+  /** The freshly recalled items that would have replaced them. */
+  next: ReadonlyArray<Item>;
+  /**
+   * The layer state captured when `prev` was pinned. Best-effort: it is held by
+   * reference, so a layer that mutates its state in place sees the current
+   * object here rather than a snapshot.
+   */
+  prevState: TState | undefined;
+  /** The layer's current state. */
+  state: TState | undefined;
+  ctx: ExecutionContext;
+  /** Soft token budget for the returned text. */
+  budget: number;
+}
+
 /** @public Parameters passed to a context layer's `onSpawn` hook when a child execution starts. */
 export interface SpawnParams<TState> {
   parentState: TState;
@@ -368,6 +406,16 @@ export interface ContextLayerHooks<TState = unknown> {
    * Use for: capping history, summarising old turns, redacting items.
    */
   projectHistory?(params: ProjectHistoryParams<TState>): Promise<ProjectHistoryResult>;
+  /**
+   * Called for an anchored layer whose pinned output has gone stale, to describe
+   * the change compactly instead of re-sending the whole block.
+   *
+   * Return `null` to fall back to the default, which republishes the full new
+   * content. Worth implementing only when the layer's output is large and its
+   * changes are small — a file set where one file changed, a ledger that gained
+   * a row. Never called for layers in the `'live'` band, which re-render anyway.
+   */
+  renderDelta?(params: RenderDeltaParams<TState>): Promise<string | null>;
 }
 
 /**
@@ -415,6 +463,11 @@ export interface ContextLayer<TState = unknown> {
   itemSchemas?: Pick<ItemSchemaExtensions, 'developerMessages' | 'items'>;
   /** Default re-render timing when `onItemAppend` requests a re-render. */
   rerenderTiming?: 'immediate' | 'batched';
+  /**
+   * Which band of the assembled view this layer's recall output sits in, and so
+   * whether it is pinned for the prompt cache. Defaults to `'auto'`.
+   */
+  placement?: LayerPlacement;
 }
 
 /** @public Configuration for how the runtime projects conversation items into the model's context window. */

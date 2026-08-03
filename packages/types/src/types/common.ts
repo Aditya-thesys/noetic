@@ -74,14 +74,27 @@ export interface TokenUsage {
   cached?: number;
 }
 
+/**
+ * @public Token counts for a single model round.
+ *
+ * `cachedTokens` and `cacheWriteTokens` are `undefined` — not `0` — when the
+ * provider reports no prompt-cache figures at all. Callers that steer on cache
+ * behaviour must tell "nothing was cached" apart from "this provider doesn't
+ * say", so the distinction is preserved rather than defaulted away.
+ */
+export interface RoundUsage {
+  inputTokens: number;
+  outputTokens: number;
+  /** Prompt tokens served from the provider's cache (a cache *read*). */
+  cachedTokens?: number;
+  /** Prompt tokens written into the provider's cache (a cache *write*). */
+  cacheWriteTokens?: number;
+}
+
 /** @public Metadata captured from the most recent step execution. */
 export interface StepMeta {
   toolCalls?: FunctionCallItem[];
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedTokens?: number;
-  };
+  usage?: RoundUsage;
   cost?: number;
   responseItems?: ReadonlyArray<Item>;
 }
@@ -89,11 +102,15 @@ export interface StepMeta {
 /** @public Structured response returned by a model adapter after an LLM call. */
 export interface LLMResponse {
   items: Item[];
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    cachedTokens?: number;
-  };
+  /** Totals across every round of the call. */
+  usage: RoundUsage;
+  /**
+   * Per-round breakdown, oldest first. Rounds after the first replay the same
+   * assembled view plus appended tool traffic, so they hit the prompt cache
+   * regardless of whether the first round did — only `rounds[0]` answers
+   * "was my prefix cached?".
+   */
+  rounds?: ReadonlyArray<RoundUsage>;
   cost?: number;
 }
 
