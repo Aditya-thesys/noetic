@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import assert from 'node:assert';
 import type { PlanExecutionEntry, PlanState } from '@noetic-tools/context';
-import { PlanPhase, planContext } from '@noetic-tools/context';
+import { PlanPhase, PlanStyle, planContext } from '@noetic-tools/context';
 import type {
+  ContextLayer,
   LlmWorkflowNode,
   SequenceWorkflowNode,
   SubflowWorkflowNode,
@@ -21,6 +22,19 @@ function makeLlmNode(overrides?: Partial<LlmWorkflowNode>): LlmWorkflowNode {
     instructions: 'Do the thing',
     ...overrides,
   };
+}
+
+type RecallResult = Awaited<ReturnType<NonNullable<ContextLayer<PlanState>['hooks']['recall']>>>;
+
+/** Pulls the rendered text out of a recall result. */
+function recallText(result: RecallResult): string {
+  assert(result !== null);
+  assert(typeof result !== 'string');
+  const msg = result.items[0];
+  assert(msg?.type === 'message');
+  const part = msg.content[0];
+  assert(part?.type === 'input_text');
+  return part.text;
 }
 
 /** Wraps a root node in the document envelope. Defaults to a depth-0 llm leaf. */
@@ -80,6 +94,21 @@ function makeExecutingState(overrides?: Partial<PlanState>): PlanState {
     workflows: {},
     executionLog: [],
     version: 1,
+    ...overrides,
+  };
+}
+
+function makeCompletedState(overrides?: Partial<PlanState>): PlanState {
+  return {
+    ...makeExecutingState(),
+    phase: PlanPhase.Completed,
+    executionLog: [
+      {
+        timestamp: 0,
+        version: 1,
+        outcome: 'success',
+      },
+    ],
     ...overrides,
   };
 }
@@ -292,7 +321,7 @@ describe('planContext layer', () => {
       assert(part.type === 'message');
       const text = part.content[0];
       assert(text.type === 'input_text');
-      expect(text.text).toContain('## Named Workflows');
+      expect(text.text).toContain('## Named workflows');
       expect(text.text).toContain('- verify: 3 nodes');
       expect(text.text).toContain('plan/getWorkflow');
       expect(text.text).not.toContain('MARKER_INSTRUCTIONS_BODY');
@@ -384,6 +413,211 @@ describe('planContext layer', () => {
       assert(text.type === 'input_text');
       expect(text.text).toContain('<plan_outcome>');
       expect(text.text).toContain('failure');
+    });
+
+    it('renders the phased briefing by default and the interview loop on request', async () => {
+      const args = {
+        log: makeItemLog(),
+        query: '',
+        ctx: makeCtx(),
+        state: makePlanningState(),
+        budget: 3e3,
+      };
+
+      const phased = recallText(await planContext().hooks.recall!(args));
+      const interview = recallText(
+        await planContext({
+          style: PlanStyle.Interview,
+        }).hooks.recall!(args),
+      );
+
+      expect(phased).toContain('### 1. Understand');
+      expect(phased).not.toContain('pair-planning');
+      expect(interview).toContain('pair-planning');
+      expect(interview).not.toContain('### 1. Understand');
+      // Whichever style runs, the model must still be told what it may call,
+      // what the actions are, and how the turn ends.
+      for (const text of [
+        phased,
+        interview,
+      ]) {
+        expect(text).toContain('## What you may use');
+        expect(text).toContain('## Actions');
+        expect(text).toContain('plan/exitPlanMode');
+        expect(text).toContain('## Ending your turn');
+      }
+    });
+
+    it('names the tools the host actually allows, not a fixed list', async () => {
+      const text = recallText(
+        await planContext({
+          additionalAllowedTools: [
+            'Bash',
+          ],
+        }).hooks.recall!({
+          log: makeItemLog(),
+          query: '',
+          ctx: makeCtx(),
+          state: makePlanningState(),
+          budget: 3e3,
+        }),
+      );
+
+      expect(text).toContain('Bash');
+    });
+
+    it('withholds sub-agent guidance until a host names a sub-agent tool', async () => {
+      const args = {
+        log: makeItemLog(),
+        query: '',
+        ctx: makeCtx(),
+        state: makePlanningState(),
+        budget: 3e3,
+      };
+
+      const bare = recallText(await planContext().hooks.recall!(args));
+      const withTool = recallText(
+        await planContext({
+          subAgentTool: 'agent',
+        }).hooks.recall!(args),
+      );
+
+      // The layer ships no sub-agent tool, so the default briefing must not
+      // send the model chasing one.
+      expect(bare).not.toContain('sub-agent');
+      expect(bare).not.toContain('parallel');
+      expect(withTool).toContain('`agent`');
+      expect(withTool).toContain('Critical Files for Implementation');
+    });
+
+    it('advertises only the node kinds the plan may actually use', async () => {
+      const layer = planContext({
+        allowedNodeKinds: [
+          'llm',
+          'sequence',
+          'subflow',
+        ],
+      });
+      const text = recallText(
+        await layer.hooks.recall!({
+          log: makeItemLog(),
+          query: '',
+          ctx: makeCtx(),
+          state: makePlanningState(),
+          budget: 3e3,
+        }),
+      );
+
+      expect(text).toContain('`llm`');
+      expect(text).toContain('restricted to the kinds');
+      expect(text).not.toContain('`fork`');
+      expect(text).not.toContain('`run`');
+      // The tool description is built from the same table, so the two agree.
+      const setPlanTree = layer.provides!.setPlanTree;
+      assert(setPlanTree.kind === 'function');
+      expect(setPlanTree.description).toContain('llm, sequence, subflow');
+      expect(setPlanTree.description).not.toContain('fork');
+    });
+
+    it('trims the fattest state dump to the headroom rather than discarding it', async () => {
+      const result = await planContext().hooks.recall!({
+        log: makeItemLog(),
+        query: '',
+        ctx: makeCtx(),
+        state: makePlanningState({
+          prd: `# Draft\n${'x'.repeat(4e4)}`,
+          planTree: makeDoc(),
+        }),
+        budget: 3e3,
+      });
+      assert(result !== null);
+      assert(typeof result !== 'string');
+      const text = recallText(result);
+
+      expect(text).toContain('## Ending your turn');
+      expect(text).toContain('## Current plan tree');
+      expect(text).toContain('</plan_mode>');
+      // The draft survives in truncated form — dropping it whole would waste
+      // most of the budget on blank space.
+      expect(text).toContain('# Draft');
+      expect(text).toContain('trimmed to fit');
+      expect(result.tokenCount).toBeLessThanOrEqual(3e3);
+    });
+
+    it('falls back to a compact briefing at the layer budget floor, and to nothing below it', async () => {
+      const layer = planContext();
+      const args = {
+        log: makeItemLog(),
+        query: '',
+        ctx: makeCtx(),
+        state: makePlanningState(),
+      };
+
+      // The layer declares min 100; the briefing must stay coherent there.
+      const floor = await layer.hooks.recall!({
+        ...args,
+        budget: 100,
+      });
+      assert(floor !== null);
+      assert(typeof floor !== 'string');
+      const text = recallText(floor);
+      expect(floor.tokenCount).toBeLessThanOrEqual(100);
+      expect(text).toContain('<plan_mode>');
+      expect(text).toContain('</plan_mode>');
+      expect(text).toContain('plan/exitPlanMode');
+      expect(text).toContain('read-only');
+
+      // Below the floor a fragment of a rule is worse than silence.
+      for (const budget of [
+        0,
+        1,
+        50,
+      ]) {
+        expect(
+          await layer.hooks.recall!({
+            ...args,
+            budget,
+          }),
+        ).toBeNull();
+      }
+    });
+
+    it('keeps every phase inside its budget', async () => {
+      const layer = planContext();
+      const states = [
+        makePlanningState({
+          prd: 'p'.repeat(3e4),
+          planTree: makeDoc(),
+        }),
+        makeExecutingState({
+          prd: 'p'.repeat(3e4),
+        }),
+        makeCompletedState(),
+      ];
+
+      for (const state of states) {
+        for (const budget of [
+          0,
+          1,
+          99,
+          100,
+          101,
+          3e3,
+        ]) {
+          const result = await layer.hooks.recall!({
+            log: makeItemLog(),
+            query: '',
+            ctx: makeCtx(),
+            state,
+            budget,
+          });
+          if (result === null) {
+            continue;
+          }
+          assert(typeof result !== 'string');
+          expect(result.tokenCount).toBeLessThanOrEqual(budget);
+        }
+      }
     });
   });
 

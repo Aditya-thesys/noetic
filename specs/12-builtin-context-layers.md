@@ -476,6 +476,8 @@ interface PlanMemoryConfig {
   maxWorkflows?: number;                      // named workflow count cap; default 20
   maxWorkflowChars?: number;                  // per-workflow JSON.stringify length cap; default 20000
   allowedNodeKinds?: WorkflowNode['kind'][];  // optional profile; hosts using it must include 'subflow'
+  style?: PlanStyle;                          // 'phased' (default) | 'interview'
+  subAgentTool?: string;                      // host's sub-agent tool name; gates the parallel-exploration guidance
   additionalPlanInstructions?: string;
   onEnterSession?: PlanEnterSessionCallback;  // () => Promise<{ slug: string }>
   onExit?: PlanExitCallback;                  // (state) => Promise<{ approved: boolean }>
@@ -512,7 +514,19 @@ Workflow names are slugs (`/^[a-z0-9][a-z0-9_-]{0,63}$/`). Documents arriving as
 
 **Behavior:**
 - `init`: Loads persisted `PlanState` from `ScopedStorage`. Defaults to idle with null PRD/tree and no workflows. A persisted tree that fails `WorkflowDocumentSchema` (e.g. a legacy format) resets to `null`; a missing `workflows` map backfills to `{}`.
-- `recall`: Phase-dependent context injection. Returns `null` in idle. In `planning`, renders `<plan_mode>` block with workflow-document authoring instructions (node kinds, the schema `$id`, keep-the-tree-small guidance), the draft PRD, the current tree JSON, and one summary line per named workflow (node count + kind histogram — bodies are read back via `plan/getWorkflow`). In `executing`, renders `<active_plan>` with PRD, tree, and workflow summaries. In terminal phases, renders `<plan_outcome>`.
+- `recall`: Phase-dependent context injection. Returns `null` in idle. In `planning`, renders the `<plan_mode>` briefing: the read-only mandate, the allowed tools, the workflow set by `style`, PRD structure, workflow-document authoring guidance (node kinds, the schema `$id`, keep-the-tree-small rules), the action list, and the turn-ending rule — followed by the draft PRD, the current tree JSON, and one summary line per named workflow (node count + kind histogram; bodies are read back via `plan/getWorkflow`). In `executing`, renders `<active_plan>` with PRD, tree, and workflow summaries. In terminal phases, renders `<plan_outcome>`.
+- **Budget:** the rendered block is fitted to `budget * 4` characters. State gives way first — the largest of the PRD draft, tree JSON, or workflow summaries is **trimmed to the remaining headroom** rather than dropped whole, so the budget is not spent on blank space. Rules are never cut mid-sentence: when they will not fit, a compact briefing replaces them, and when even that overflows, `recall` returns `null`. The layer therefore never emits a fragment of a rule, and never exceeds its budget.
+
+**Planning styles** (`style`, default `'phased'`):
+
+| Style | Shape of the turn | Suits |
+|-------|-------------------|-------|
+| `'phased'` | Understand → design → review → write → exit | Work whose shape is already known |
+| `'interview'` | Explore → write → ask, on repeat, building the PRD from a skeleton | Requests whose requirements are still vague |
+
+Both styles end a turn the same way: with `AskUserQuestion`, or with `plan/exitPlanMode`. Asking for approval in prose is explicitly ruled out — that request IS `exitPlanMode`.
+
+**Rendered from configuration, not hard-coded.** The briefing's tool list is the layer's own allow-set (so `additionalAllowedTools` appears in it), the node-kind guidance is filtered by `allowedNodeKinds`, and `setPlanTree`'s tool description is built from the same kind table as the briefing — the two cannot disagree about what a plan may contain. Sub-agent guidance appears only when `subAgentTool` names a tool the host actually registers; the layer ships none, and instructing the model to call a tool that does not exist costs a turn.
 - `beforeToolCall`: In `planning` phase, restricts tools to read-only (`Read`, `Grep`, `Find`, `Ls`) plus plan layer tools and `activateSkill`. Denies mutating tools (`Write`, `Edit`, `Bash`). No restrictions outside planning phase.
 - `onSpawn`: Deep-clones state to child execution.
 - `onComplete`: If `executing`, records outcome in `executionLog` and transitions to `completed` or `failed`. State is returned to the runtime for persistence.

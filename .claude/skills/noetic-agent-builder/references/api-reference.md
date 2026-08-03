@@ -810,6 +810,8 @@ planMemory({
   maxWorkflows?: number;                  // named workflow count cap; default 20
   maxWorkflowChars?: number;              // per-workflow serialized size cap; default 20_000
   allowedNodeKinds?: WorkflowNode['kind'][]; // optional profile; must include 'subflow' if set
+  style?: PlanStyle;                      // 'phased' (default) | 'interview'
+  subAgentTool?: string;                  // host's sub-agent tool name; gates sub-agent guidance
   additionalPlanInstructions?: string;
   onEnterSession?: () => Promise<{ slug: string }>;
   onExit?: (state: PlanState) => Promise<{ approved: boolean }>;
@@ -827,6 +829,14 @@ planMemory({
 - `plan/getWorkflow({ name })` — returns the stored JSON (recall shows summaries, not bodies)
 - `plan/exitPlanMode({ action: 'execute' | 'cancel' })` — `execute` rejects dangling subflow refs and workflow cycles before invoking `onExit`
 - `status` (layerData) — `{ phase, hasPrd, hasPlanTree, workflowNames, version }`
+
+**Planning styles (`style`):** `PlanStyle.Phased` (default) runs understand → design → review → write → exit. `PlanStyle.Interview` loops explore → write → ask, growing the PRD from a skeleton — better when requirements are still vague. Both end a turn only with `AskUserQuestion` or `plan/exitPlanMode`; asking for approval in prose is ruled out explicitly.
+
+**Sub-agents (`subAgentTool`):** the layer ships no sub-agent tool, so the briefing carries no sub-agent guidance until a host names one. Set it to enable the parallel-exploration advice (how many explorers, when a second perspective pays, what background to hand each agent).
+
+**Briefing is rendered from config:** the tool list is the layer's allow-set (so `additionalAllowedTools` shows up), the node-kind guidance is filtered by `allowedNodeKinds`, and `setPlanTree`'s description is built from the same kind table — briefing and tool cannot disagree.
+
+**Recall budget:** briefing and state share `{ min: 100, max: 3000 }` tokens. State gives way first and is *trimmed to the headroom*, not dropped whole. Rules are never cut mid-sentence — a compact briefing replaces them, and below that `recall` returns `null`.
 
 **Executing an approved plan:** feed `state.planTree` + `new Map(Object.entries(state.workflows))` to `parseAndRunWorkflow({ json, workflows, ... })` — the plan format IS the JSON workflow runtime format.
 

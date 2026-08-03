@@ -15,6 +15,15 @@ import {
 } from '@noetic-tools/types';
 import { z } from 'zod';
 import { layerData, layerFn } from '../layer-provides';
+import {
+  nodeKindList,
+  PlanStyle,
+  renderExecuting,
+  renderPlanning,
+  renderTerminal,
+} from './plan-prompts';
+
+export { PlanStyle } from './plan-prompts';
 
 //#region Constants
 
@@ -112,6 +121,20 @@ export interface PlanContextConfig {
    * must include `'subflow'` for named workflows to be referenceable.
    */
   allowedNodeKinds?: WorkflowNode['kind'][];
+  /**
+   * How the planning briefing shapes the turn. `phased` (default) marches
+   * through explore → design → review → write → exit; `interview` loops
+   * explore → write → ask, which suits requests whose requirements are still
+   * vague.
+   */
+  style?: PlanStyle;
+  /**
+   * Name of the host's sub-agent tool, when it has one (e.g. `'agent'`). The
+   * layer ships no such tool, so the briefing's parallel-exploration guidance
+   * stays out until a host names one — telling the model to call a tool that is
+   * not registered costs a turn and teaches it nothing.
+   */
+  subAgentTool?: string;
   /** Extra free-form instructions appended to the planning-phase recall payload. */
   additionalPlanInstructions?: string;
   /** Called once when the layer transitions Idle → Planning. */
@@ -334,117 +357,36 @@ function trimExecutionLog(log: PlanExecutionEntry[]): PlanExecutionEntry[] {
   return log.slice(log.length - MAX_EXECUTION_LOG_ENTRIES);
 }
 
-/** One-line summary of a workflow: node count and a kind histogram. */
-function summarizeWorkflow(name: string, doc: WorkflowDocument): string {
-  const counts = new Map<string, number>();
-  let total = 0;
-  for (const node of walkWorkflow(doc.root)) {
-    total++;
-    counts.set(node.kind, (counts.get(node.kind) ?? 0) + 1);
-  }
-  const histogram = [
-    ...counts.entries(),
-  ]
-    .map(([kind, n]) => `${kind} x${n}`)
-    .join(', ');
-  return `- ${name}: ${total} node${total === 1 ? '' : 's'} (${histogram})`;
-}
-
-function renderWorkflowSummaries(state: PlanState): string[] {
-  const entries = Object.entries(state.workflows).sort(([a], [b]) => a.localeCompare(b));
-  if (entries.length === 0) {
-    return [];
-  }
-  return [
-    '',
-    '## Named Workflows',
-    '',
-    ...entries.map(([name, doc]) => summarizeWorkflow(name, doc)),
-    "(Use plan/getWorkflow to review a workflow's JSON before revising it.)",
-  ];
-}
-
 //#endregion
 
 //#region Recall Renderers
 
-function recallPlanning(state: PlanState, additionalInstructions?: string): string {
-  const sections: string[] = [
-    '<plan_mode>',
-    'You are in PLAN MODE. You may only use read-only tools (Read, Grep, Find, Ls), AskUserQuestion, skill activation, sub-agent coordination tools, and requestPlanApproval to explore the codebase and request execution approval.',
-    'Your goal is to produce a PRD document and (optionally) a structured execution plan.',
-    '',
-    '## Workflow (5 phases)',
-    '',
-    '1. **Initial Understanding** — Read code and gather context. To parallelise exploration, use the `agent` tool to spawn bounded read-only sub-agents; up to 3 in parallel. Each sub-agent returns a focused report.',
-    '2. **Design** — Synthesise findings. Optionally spawn planning sub-agents (1–3 in parallel) to draft alternative implementation approaches and surface trade-offs.',
-    '3. **Review** — Read the critical files identified by your subagents directly so you understand them first-hand. If anything is ambiguous, ask the user a focused question.',
-    '4. **Final Plan** — Write the PRD via `plan/updatePrd`. Lead with a **Context** section (why this change), then your single recommended approach, the paths of files to modify, existing functions/utilities to reuse, and a **Verification** section. Then call `plan/setPlanTree` with `{ "document": { "version": 1, "root": <WorkflowNode> } }` — a JSON workflow conforming to ' +
-      SCHEMA_URL +
-      '. Node kinds: `llm` (model turn), `tool` (single tool call), `sequence`, `fork` (parallel paths), `branch` (substring routing), `loop` (body + until predicate), `spawn` (isolated child), `subflow` (reference to a named workflow), and coding-agent nodes (`claude-code`, `codex`, `opencode`, `pi`). Every node needs a unique `id`. **Keep the tree SMALL** — aim for at most ~7 top-level nodes the user can review at a glance. Factor detailed mechanics (multi-step verification, retries, fan-out) into NAMED workflows: define each with `plan/setWorkflow` `{ "name": "<slug>", "document": {...} }` and reference it from the tree with `{ "kind": "subflow", "id": "...", "ref": "<slug>" }`. Named workflows may reference other named workflows but must not form cycles.',
-    '5. **Exit** — Call `plan/exitPlanMode` with `{ action: "execute" }` to request approval. Every subflow ref must name a defined workflow or the exit is rejected. The user must accept before execution begins; if they reject, you stay in Plan Mode and may revise.',
-    '',
-    '## Available actions',
-    '- `plan/updatePrd` — set markdown PRD content',
-    '- `plan/setPlanTree` — set the reviewed plan as a JSON workflow document',
-    '- `plan/setWorkflow` — create or replace a named workflow (referenced via subflow nodes)',
-    '- `plan/removeWorkflow` — delete a named workflow',
-    "- `plan/getWorkflow` — read back a named workflow's JSON",
-    '- `plan/exitPlanMode` `{ action: "execute" }` — request approval and exit to executing',
-    '- `plan/exitPlanMode` `{ action: "cancel" }` — discard plan and return to idle',
-    '',
-    '## Constraints',
-    '- DO NOT create, modify, or delete files (other than via the plan/* actions).',
-    '- DO NOT run mutating shell commands. Read-only exploration only.',
-    '- End each turn either by asking the user a focused clarifying question or by calling `plan/exitPlanMode`.',
-  ];
-
-  if (additionalInstructions) {
-    sections.push('', '## Additional Instructions', '', additionalInstructions);
-  }
-
-  if (state.prd) {
-    sections.push('', '## Current PRD Draft', '', state.prd);
-  }
-
-  if (state.planTree) {
-    sections.push('', '## Current Plan Tree', '', JSON.stringify(state.planTree, null, 2));
-  }
-
-  sections.push(...renderWorkflowSummaries(state));
-
-  sections.push('</plan_mode>');
-  return sections.join('\n');
+interface RecallOptions {
+  style: PlanStyle;
+  allowedTools: string[];
+  allowedNodeKinds?: WorkflowNode['kind'][];
+  subAgentTool?: string;
+  extra?: string;
+  maxChars: number;
 }
 
-function recallExecuting(state: PlanState): string {
-  const sections: string[] = [
-    '<active_plan>',
-    '## PRD',
-    '',
-    state.prd ?? '',
-  ];
-  if (state.planTree) {
-    sections.push('', '## Execution Plan', '', JSON.stringify(state.planTree, null, 2));
-  }
-  sections.push(...renderWorkflowSummaries(state));
-  sections.push('</active_plan>');
-  return sections.join('\n');
-}
-
-function recallTerminal(state: PlanState): string {
-  const lastEntry = state.executionLog[state.executionLog.length - 1];
-  const outcome = lastEntry?.outcome ?? 'unknown';
-  return `<plan_outcome>Plan v${state.version} ${outcome}.</plan_outcome>`;
-}
-
-type RecallRenderer = (state: PlanState, additionalInstructions?: string) => string;
+/** Returns null when the budget cannot hold anything the model could act on. */
+type RecallRenderer = (state: PlanState, options: RecallOptions) => string | null;
 
 const RECALL_RENDERERS: Partial<Record<PlanPhase, RecallRenderer>> = {
-  [PlanPhase.Planning]: recallPlanning,
-  [PlanPhase.Executing]: recallExecuting,
-  [PlanPhase.Completed]: recallTerminal,
-  [PlanPhase.Failed]: recallTerminal,
+  [PlanPhase.Planning]: (state, options) =>
+    renderPlanning(state, {
+      style: options.style,
+      schemaUrl: SCHEMA_URL,
+      allowedTools: options.allowedTools,
+      allowedNodeKinds: options.allowedNodeKinds,
+      subAgentTool: options.subAgentTool,
+      extra: options.extra,
+      maxChars: options.maxChars,
+    }),
+  [PlanPhase.Executing]: (state, options) => renderExecuting(state, options.maxChars),
+  [PlanPhase.Completed]: (state, options) => renderTerminal(state, options.maxChars),
+  [PlanPhase.Failed]: (state, options) => renderTerminal(state, options.maxChars),
 };
 
 //#endregion
@@ -473,6 +415,8 @@ export function planContext(config?: PlanContextConfig): ContextLayer<PlanState>
     allowedNodeKinds: config?.allowedNodeKinds,
   };
   const allowedTools = buildAllowedTools(config);
+  const style = config?.style ?? PlanStyle.Phased;
+  const subAgentTool = config?.subAgentTool;
   const additionalPlanInstructions = config?.additionalPlanInstructions;
   const onEnterSession = config?.onEnterSession;
   const onExit = config?.onExit;
@@ -587,7 +531,11 @@ export function planContext(config?: PlanContextConfig): ContextLayer<PlanState>
       >({
         description:
           'Set the execution plan as a JSON workflow document: { "document": { "version": 1, "root": <WorkflowNode> } }. ' +
-          'WorkflowNode is a discriminated union on "kind" (llm, tool, sequence, fork, branch, loop, spawn, subflow, claude-code, codex, opencode, pi); every node needs a unique "id". ' +
+          // Drawn from the same table as the briefing's kind list, so the two
+          // can never disagree about what this plan is allowed to use.
+          `WorkflowNode is a discriminated union on "kind" (${nodeKindList(
+            config?.allowedNodeKinds,
+          )}); every node needs a unique "id". ` +
           'Keep this tree SMALL — reference named workflows with { "kind": "subflow", "id": "...", "ref": "<workflow-name>" } and define them via plan/setWorkflow. ' +
           `Schema: ${SCHEMA_URL}`,
         // The document is validated with WorkflowDocumentSchema inside execute
@@ -896,16 +844,28 @@ export function planContext(config?: PlanContextConfig): ContextLayer<PlanState>
           return null;
         }
 
-        const content = renderer(state, additionalPlanInstructions);
-        // Respect the budget: estimateTokens uses ~4 chars/token, so cap the
-        // rendered text at budget*4 chars to keep tokenCount <= budget.
-        const maxChars = budget * 4;
-        const trimmed = content.length > maxChars ? content.slice(0, maxChars) : content;
+        // estimateTokens counts ~4 chars per token, so budget*4 chars is the
+        // ceiling the renderer must fit under.
+        const content = renderer(state, {
+          style,
+          allowedTools: [
+            ...allowedTools,
+          ].sort(),
+          allowedNodeKinds: limits.allowedNodeKinds,
+          subAgentTool,
+          extra: additionalPlanInstructions,
+          maxChars: budget * 4,
+        });
+        // A budget too small for even the compact briefing buys nothing but a
+        // fragment of a rule, so the layer sits the turn out.
+        if (content === null) {
+          return null;
+        }
         return {
           items: [
-            createMessage(trimmed, 'developer'),
+            createMessage(content, 'developer'),
           ],
-          tokenCount: estimateTokens(trimmed),
+          tokenCount: estimateTokens(content),
         };
       },
 

@@ -34,6 +34,8 @@ interface PlanMemoryConfig {
   maxWorkflows?: number;
   maxWorkflowChars?: number;
   allowedNodeKinds?: WorkflowNode['kind'][];
+  style?: PlanStyle;
+  subAgentTool?: string;
   additionalPlanInstructions?: string;
   onEnterSession?: () => Promise<{ slug: string }>;
   onExit?: (state: PlanState) => Promise<{ approved: boolean }>;
@@ -49,9 +51,48 @@ interface PlanMemoryConfig {
 | `maxWorkflows` | `number` | `20` | Maximum number of named workflows |
 | `maxWorkflowChars` | `number` | `20000` | Maximum serialized size of each workflow document |
 | `allowedNodeKinds` | `WorkflowNode['kind'][]` | all kinds | Optional profile restricting which node kinds a plan may use. Hosts that set this must include `'subflow'` |
+| `style` | `PlanStyle` | `'phased'` | How the planning briefing shapes the turn — see [Planning styles](#planning-styles) |
+| `subAgentTool` | `string` | -- | Name of the host's sub-agent tool. Unset, the briefing omits all sub-agent guidance — see [Sub-agents](#sub-agents) |
 | `additionalPlanInstructions` | `string` | -- | Extra free-form instructions appended to the planning-phase recall payload |
 | `onEnterSession` | `() => Promise<{ slug: string }>` | -- | Host callback invoked once on the Idle → Planning transition. Returns a session identifier the host owns (e.g. an on-disk plan directory slug), stored on the state as `planSlug` |
 | `onExit` | `(state: PlanState) => Promise<{ approved: boolean }>` | -- | Host callback invoked when the model requests `plan/exitPlanMode` with `action: 'execute'`. Return `{ approved: false }` to keep the layer in Planning — the model is told the user rejected the plan and should revise it before requesting approval again |
+
+## Planning styles
+
+A planning turn can be spent two ways, and which one fits depends on whether the missing information is in the codebase or in the user's head.
+
+```ts validate=none
+import { planMemory, PlanStyle } from '@noetic-tools/core';
+
+const layer = planMemory({ style: PlanStyle.Interview });
+```
+
+| Style | Shape of the turn | Reach for it when |
+|---|---|---|
+| `'phased'` (default) | Understand → design → review → write → exit | The work's shape is known and the job is getting the details right |
+| `'interview'` | Explore → write → ask, on repeat. The PRD starts as a skeleton on the first turn and fills in as questions get answered. | Requirements are still vague and the user is the missing input |
+
+Both styles enforce the same turn-ending rule: a turn ends with `AskUserQuestion` or with `plan/exitPlanMode`, never with a prose question. Asking "does this plan look right?" IS `exitPlanMode` — the briefing says so explicitly, because a model that asks in prose leaves the plan in limbo with no approval to act on.
+
+### Sub-agents
+
+The layer ships no sub-agent tool. Set `subAgentTool` to the name of yours to add the parallel-exploration guidance to the briefing — how many explorers to launch (usually one, never more than three), when a second perspective is worth it, and what background to hand each agent so Phase 1's work is not thrown away at the Phase 2 boundary.
+
+```ts validate=none
+planMemory({ subAgentTool: 'agent' });
+```
+
+Left unset, the briefing tells the model to explore directly. This is deliberate: instructing a model to call a tool that is not registered costs it a turn and teaches it nothing.
+
+### What the briefing says you may use
+
+The "What you may use" section is rendered from the layer's own allow-set, so it always names exactly what `beforeToolCall` will let through — including anything added via `additionalAllowedTools`. The node-kind guidance is filtered by `allowedNodeKinds` the same way, and `plan/setPlanTree`'s tool description is built from the same table, so the briefing and the tool cannot disagree about what a plan may contain.
+
+### Budget
+
+The briefing and the plan state share the layer's budget (`{ min: 100, max: 3000 }` tokens by default). State gives way first: the largest of the PRD draft, the tree JSON, or the workflow summaries is **trimmed to the remaining headroom** rather than dropped whole, since a truncated draft is worth more than the blank space dropping it would leave. The model can read state back with `plan/getWorkflow`.
+
+Rules are never cut mid-sentence. If they will not fit, a compact briefing replaces them — the restriction, where the plan goes, and how the turn ends — and if even that overflows, the layer contributes nothing that turn rather than half a rule.
 
 ## Phase Lifecycle
 

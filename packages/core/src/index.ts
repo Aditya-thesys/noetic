@@ -153,6 +153,7 @@ export {
   historyWindow,
   observationalContext,
   PlanPhase,
+  PlanStyle,
   planContext,
   staticContent,
   steering,
