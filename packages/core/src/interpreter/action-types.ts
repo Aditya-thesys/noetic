@@ -10,6 +10,7 @@ export type {
   ContextRerenderRequest,
   ExecuteStepFn,
   FunctionCallItem,
+  InputMessageItem,
   Item,
   ProjectionPolicy,
   RecallLayerOutput,

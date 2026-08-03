@@ -6,6 +6,7 @@ import type {
   Item,
   ItemSchemaRegistry,
   LLMResponse,
+  RoundUsage,
   Span,
   Tool,
   TraceExporter,
@@ -387,16 +388,15 @@ class CallSpanCollector {
   }
 
   /** Record usage + cost on a model-call span. */
-  finishModelSpan(
-    span: Span,
-    usage: {
-      inputTokens: number;
-      outputTokens: number;
-    },
-    cost: number | undefined,
-  ): void {
+  finishModelSpan(span: Span, usage: RoundUsage, cost: number | undefined): void {
     span.setAttribute(GenAI.USAGE_INPUT_TOKENS, usage.inputTokens);
     span.setAttribute(GenAI.USAGE_OUTPUT_TOKENS, usage.outputTokens);
+    if (usage.cachedTokens !== undefined) {
+      span.setAttribute(GenAI.USAGE_CACHED_INPUT_TOKENS, usage.cachedTokens);
+    }
+    if (usage.cacheWriteTokens !== undefined) {
+      span.setAttribute(GenAI.USAGE_CACHE_WRITE_TOKENS, usage.cacheWriteTokens);
+    }
     if (cost !== undefined) {
       span.setAttribute(GenAI.COST, cost);
     }
@@ -510,6 +510,10 @@ export class AgentHarnessModelCaller {
       outputTokens: 0,
       cachedTokens: 0,
     };
+    // Rounds after the first replay the same prefix and so hit the prompt cache
+    // whatever the first round did. Keep them apart: only round 0 says whether
+    // the assembled view was cached (see `noteCacheOutcome`).
+    const rounds: RoundUsage[] = [];
     let totalCost = 0;
     const conversationInput = itemsToInput(prepared.remaining);
     const textFormat = request.outputSchema ? buildTextFormat(request.outputSchema) : undefined;
@@ -659,14 +663,8 @@ export class AgentHarnessModelCaller {
       });
       const roundUsage = extractUsage(sdkResponse.usage);
       const roundCost = sdkResponse.usage?.cost ?? 0;
-      spans.finishModelSpan(
-        modelSpan,
-        {
-          inputTokens: roundUsage.inputTokens,
-          outputTokens: roundUsage.outputTokens,
-        },
-        roundCost > 0 ? roundCost : undefined,
-      );
+      spans.finishModelSpan(modelSpan, roundUsage, roundCost > 0 ? roundCost : undefined);
+      rounds.push(roundUsage);
       totalUsage.inputTokens += roundUsage.inputTokens;
       totalUsage.outputTokens += roundUsage.outputTokens;
       totalUsage.cachedTokens += roundUsage.cachedTokens ?? 0;
@@ -702,7 +700,16 @@ export class AgentHarnessModelCaller {
 
     return {
       items: allItems,
-      usage: totalUsage,
+      usage: {
+        inputTokens: totalUsage.inputTokens,
+        outputTokens: totalUsage.outputTokens,
+        // Stay `undefined` when no round reported a figure, so callers can tell
+        // "this provider says nothing about caching" from "nothing was cached".
+        cachedTokens: rounds.some((r) => r.cachedTokens !== undefined)
+          ? totalUsage.cachedTokens
+          : undefined,
+      },
+      rounds,
       cost: totalCost > 0 ? totalCost : undefined,
     };
   }

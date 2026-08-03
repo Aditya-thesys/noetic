@@ -78,6 +78,7 @@ import type {
   ScopedStorage,
   StorageAdapter,
 } from '@noetic-tools/context';
+import { createContextCacheStore } from '@noetic-tools/context';
 //#endregion
 import type {
   AgentHarnessContract,
@@ -441,6 +442,7 @@ export function makeMockHarness(): AgentHarnessContract {
     fs: createNodeFsAdapter(),
     shell: createNoopShellAdapter(),
     subprocess: createInMemorySubprocessAdapter(),
+    contextCache: createContextCacheStore(),
     callModel: async () => {
       throw new Error('not impl');
     },

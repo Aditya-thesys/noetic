@@ -4,6 +4,10 @@ export const GenAI = {
   REQUEST_MODEL: 'gen_ai.request.model',
   USAGE_INPUT_TOKENS: 'gen_ai.usage.input_tokens',
   USAGE_OUTPUT_TOKENS: 'gen_ai.usage.output_tokens',
+  /** Prompt tokens served from the provider's cache. Absent if unreported. */
+  USAGE_CACHED_INPUT_TOKENS: 'gen_ai.usage.cached_input_tokens',
+  /** Prompt tokens written into the provider's cache. Absent if unreported. */
+  USAGE_CACHE_WRITE_TOKENS: 'gen_ai.usage.cache_write_tokens',
   COST: 'gen_ai.cost',
 } as const;
 
@@ -35,4 +39,20 @@ export const NoeticAttr = {
   SESSION_ID: 'noetic.session.id',
   /** Resource the session is scoped to (the run's `ctx.resourceId`), when set. */
   RESOURCE_ID: 'noetic.resource.id',
+  /** Id of the anchoring epoch the assembled view belongs to. */
+  CONTEXT_EPOCH_ID: 'noetic.context.epoch.id',
+  /** Assemblies served by the current epoch, including this one. */
+  CONTEXT_EPOCH_AGE: 'noetic.context.epoch.age',
+  /** Why the epoch re-anchored on this assembly, when it did. */
+  CONTEXT_REANCHOR_REASON: 'noetic.context.reanchor_reason',
+  /** Tokens in the anchor band (the cache-stable prefix). */
+  CONTEXT_ANCHOR_TOKENS: 'noetic.context.anchor_tokens',
+  /** Tokens in the live band (rendered after history). */
+  CONTEXT_LIVE_TOKENS: 'noetic.context.live_tokens',
+  /** Tokens spent superseding stale anchors. */
+  CONTEXT_DELTA_TOKENS: 'noetic.context.delta_tokens',
+  /** JSON array of `{ id, placement, served }` per contributing layer. */
+  CONTEXT_LAYER_PLACEMENTS: 'noetic.context.layer_placements',
+  /** JSON array of `{ id, rate, rebillTokens }` per contributing layer. */
+  CONTEXT_LAYER_CHURN: 'noetic.context.layer_churn',
 } as const;

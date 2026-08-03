@@ -245,7 +245,14 @@ export function extractOutputItems(response: OpenRouterAgent.OpenResponsesResult
   ];
 }
 
-/** @internal */
+/**
+ * @internal
+ *
+ * A missing `cachedTokens` stays `undefined` rather than collapsing to `0`:
+ * context anchoring reads it to decide whether the prompt prefix survived, and
+ * "this provider reports no cache figures" must not look like "nothing was
+ * cached".
+ */
 export function extractUsage(
   usage: OpenRouterAgent.Usage | null | undefined,
 ): LLMResponse['usage'] {
@@ -259,7 +266,23 @@ export function extractUsage(
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     cachedTokens: usage.inputTokensDetails?.cachedTokens,
+    cacheWriteTokens: cacheWriteTokensOf(usage.inputTokensDetails),
   };
+}
+
+/**
+ * OpenRouter reports `cache_write_tokens` alongside `cached_tokens`, but the
+ * SDK's `InputTokensDetails` type declares only the latter. Read it off the
+ * value rather than the type, and stay `undefined` when it is genuinely absent
+ * — a write of zero and no report at all mean different things to the epoch
+ * logic (see `noteCacheOutcome`).
+ */
+function cacheWriteTokensOf(details: unknown): number | undefined {
+  if (typeof details !== 'object' || details === null || !('cacheWriteTokens' in details)) {
+    return undefined;
+  }
+  const value = details.cacheWriteTokens;
+  return typeof value === 'number' ? value : undefined;
 }
 
 //#endregion

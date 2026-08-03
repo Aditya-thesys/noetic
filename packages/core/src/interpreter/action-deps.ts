@@ -1,11 +1,21 @@
-export type { LayerStateStore } from '@noetic-tools/context';
+export type { LayerServeInfo, LayerStateStore } from '@noetic-tools/context';
 export {
   allocateBudgets,
   assembleView,
+  churnFor,
+  churnRate,
   commitLayerUsage,
   computeLayerUsage,
   contextToExecCtx,
+  createContextCacheStore,
   DEFAULT_PROJECTION,
+  lineageKey,
+  noteCacheOutcome,
+  openEpoch,
+  pin,
+  pinKey,
+  reanchorReason,
+  resolveCacheConfig,
   resolveLayerTools,
   returnLayers,
   spawnLayers,

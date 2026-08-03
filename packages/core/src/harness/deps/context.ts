@@ -6,6 +6,7 @@ export {
   beforeToolCallLayers,
   completeLayers,
   contextToExecCtx,
+  createContextCacheStore,
   createLayerStateStore,
   createRecallCache,
   DEFAULT_PROJECTION,

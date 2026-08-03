@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { assembleView } from '@noetic-tools/context';
 import type { Item } from '@noetic-tools/types';
 import { estimateTokens } from '@noetic-tools/types';
-import { makeMessage } from '../_helpers';
+import { makeFunctionCall, makeFunctionCallOutput, makeMessage } from '../_helpers';
 
 /** Serialized token cost — mirrors the projector's conservative estimate. */
 function itemCost(item: Item): number {
@@ -286,6 +286,250 @@ describe('assembleView', () => {
       expect(viewTexts(view)).toEqual([
         'slot-low-AAA',
       ]);
+    });
+  });
+
+  describe('bands', () => {
+    function bandPolicy(tokenBudget: number) {
+      return {
+        tokenBudget,
+        responseReserve: 0,
+        overflow: 'sliding_window' as const,
+      };
+    }
+
+    it('orders the bands system, anchor, history, live, supersede, tail', () => {
+      const view = assembleView({
+        systemPromptItems: [
+          makeMessage('system', 'sys-band'),
+        ],
+        layerOutputItems: [
+          makeMessage('developer', 'anchor-band'),
+        ],
+        historyItems: [
+          makeMessage('user', 'history-band'),
+        ],
+        liveLayerItems: [
+          makeMessage('developer', 'live-band'),
+        ],
+        deltaItems: [
+          makeMessage('developer', 'delta-band'),
+        ],
+        tailItems: [
+          makeMessage('developer', 'tail-band'),
+        ],
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'sys-band',
+        'anchor-band',
+        'history-band',
+        'live-band',
+        'delta-band',
+        'tail-band',
+      ]);
+    });
+
+    it('keeps the same order under a policy', () => {
+      const view = assembleView({
+        systemPromptItems: [
+          makeMessage('system', 'sys-band'),
+        ],
+        layerOutputItems: [
+          makeMessage('developer', 'anchor-band'),
+        ],
+        historyItems: [
+          makeMessage('user', 'history-band'),
+        ],
+        liveLayerItems: [
+          makeMessage('developer', 'live-band'),
+        ],
+        deltaItems: [
+          makeMessage('developer', 'delta-band'),
+        ],
+        tailItems: [
+          makeMessage('developer', 'tail-band'),
+        ],
+        policy: bandPolicy(10_000),
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'sys-band',
+        'anchor-band',
+        'history-band',
+        'live-band',
+        'delta-band',
+        'tail-band',
+      ]);
+    });
+
+    it('omitting the new bands reproduces the original three-part view', () => {
+      const args = {
+        systemPromptItems: [
+          makeMessage('system', 'sys-band'),
+        ],
+        layerOutputItems: [
+          makeMessage('developer', 'anchor-band'),
+        ],
+        historyItems: [
+          makeMessage('user', 'history-band'),
+        ],
+      };
+
+      expect(viewTexts(assembleView(args))).toEqual([
+        'sys-band',
+        'anchor-band',
+        'history-band',
+      ]);
+      expect(
+        viewTexts(
+          assembleView({
+            ...args,
+            policy: bandPolicy(10_000),
+          }),
+        ),
+      ).toEqual([
+        'sys-band',
+        'anchor-band',
+        'history-band',
+      ]);
+    });
+
+    // Each supersede corrects a pinned block that is already in the view, so
+    // dropping one leaves the model reading content known to be stale.
+    it('keeps every supersede even when the budget cannot hold them', () => {
+      const small = makeMessage('developer', 'delta-small');
+      const huge = makeMessage('developer', `delta-huge ${'z'.repeat(4_000)}`);
+      const view = assembleView({
+        systemPromptItems: [],
+        layerOutputItems: [],
+        historyItems: [],
+        deltaItems: [
+          small,
+          huge,
+        ],
+        policy: bandPolicy(itemCost(small) + 10),
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'delta-small',
+        'delta-huge z',
+      ]);
+    });
+
+    it('spends history rather than a supersede when the budget is tight', () => {
+      const delta = makeMessage('developer', 'delta-wins');
+      const view = assembleView({
+        systemPromptItems: [],
+        layerOutputItems: [],
+        historyItems: [
+          makeMessage('user', 'history-loses'),
+        ],
+        deltaItems: [
+          delta,
+        ],
+        policy: bandPolicy(itemCost(delta)),
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'delta-wins',
+      ]);
+    });
+
+    it('keeps the supersedes when they fit', () => {
+      const delta = makeMessage('developer', 'delta-fits');
+      const view = assembleView({
+        systemPromptItems: [],
+        layerOutputItems: [],
+        historyItems: [],
+        deltaItems: [
+          delta,
+        ],
+        policy: bandPolicy(itemCost(delta) + 10),
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'delta-fits',
+      ]);
+    });
+
+    it('claims supersedes ahead of history', () => {
+      const delta = makeMessage('developer', 'delta-wins');
+      const history = makeMessage('user', 'history-loses');
+      const view = assembleView({
+        systemPromptItems: [],
+        layerOutputItems: [],
+        historyItems: [
+          history,
+        ],
+        deltaItems: [
+          delta,
+        ],
+        policy: bandPolicy(itemCost(delta) + 2),
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'delta-wins',
+      ]);
+    });
+
+    // Steering guidance is the correction a retry exists to deliver.
+    it('never drops the tail, even with no budget for it', () => {
+      const tail = makeMessage('developer', 'tail-lives');
+      const view = assembleView({
+        systemPromptItems: [],
+        layerOutputItems: [],
+        historyItems: [
+          makeMessage('user', 'history-drops'),
+        ],
+        tailItems: [
+          tail,
+        ],
+        policy: bandPolicy(1),
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'tail-lives',
+      ]);
+    });
+
+    it('gives the anchor band first claim over the live band', () => {
+      const anchor = makeMessage('developer', 'anchor-keeps');
+      const live = makeMessage('developer', 'live-dropped');
+      expect(itemCost(anchor)).toBe(itemCost(live));
+      const view = assembleView({
+        systemPromptItems: [],
+        layerOutputItems: [
+          anchor,
+        ],
+        historyItems: [],
+        liveLayerItems: [
+          live,
+        ],
+        policy: bandPolicy(itemCost(anchor)),
+      });
+
+      expect(viewTexts(view)).toEqual([
+        'anchor-keeps',
+      ]);
+    });
+
+    it('strips an orphaned tool call left by trimming history', () => {
+      const view = assembleView({
+        systemPromptItems: [],
+        layerOutputItems: [],
+        historyItems: [
+          makeFunctionCall('call-1', 'search'),
+          makeFunctionCallOutput('call-1', 'result'),
+        ],
+        liveLayerItems: [
+          makeMessage('developer', 'live-band'),
+        ],
+        policy: bandPolicy(200),
+      });
+
+      const kinds = view.map((i) => i.type);
+      expect(kinds.includes('function_call')).toBe(kinds.includes('function_call_output'));
     });
   });
 });

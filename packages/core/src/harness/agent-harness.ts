@@ -15,6 +15,7 @@ import {
   beforeToolCallLayers,
   completeLayers,
   contextToExecCtx,
+  createContextCacheStore,
   createLayerStateStore,
   createRecallCache,
   DEFAULT_PROJECTION,
@@ -35,6 +36,7 @@ import {
   deduplicateTools,
   dispatchStepThroughAdapter,
   execute,
+  prepareBandedView,
 } from './deps/interpreter';
 import type {
   CheckpointStore,
@@ -69,6 +71,8 @@ import type {
   Channel,
   ChannelHandle,
   Context,
+  ContextCacheConfig,
+  ContextCacheStore,
   ContextData,
   ContextLayer,
   CwdState,
@@ -160,6 +164,8 @@ interface AgentHarnessOpts<TParams extends Record<string, unknown> = Record<stri
   projection?: ProjectionPolicy;
   /** When true, every layer is recalled atomically regardless of its `recallMode`. */
   forceAtomicRecall?: boolean;
+  /** Tuning for prompt-cache anchoring. See `ContextCacheConfig` for the defaults. */
+  contextCache?: ContextCacheConfig;
   traceExporter?: TraceExporter;
   layerStateStore?: LayerStateStore;
   /** Default delivery mode for messages that don't specify one. Defaults to `next-turn`. */
@@ -286,7 +292,46 @@ export function resolveLlmClient(
   };
 }
 
-function createClient(config?: LlmProviderConfig): OpenRouter | undefined {
+/**
+ * Ask the provider to cache the prompt prefix.
+ *
+ * Anthropic caching is opt-in — without a breakpoint it caches nothing however
+ * stable the prefix is, measured against live models. OpenRouter accepts a
+ * `cache_control` directive on the request and places the breakpoints itself;
+ * providers that cache on their own (OpenAI, Gemini) ignore it.
+ *
+ * It has to be injected here rather than passed with the other request fields:
+ * the SDK validates the request against a generated schema that drops keys it
+ * does not know, and `cache_control` is one of them.
+ */
+async function addCacheBreakpoint(request: Request): Promise<Request> {
+  const body = await request.clone().text();
+  if (!body) {
+    return request;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return request;
+  }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return request;
+  }
+  return new Request(request, {
+    body: JSON.stringify({
+      ...payload,
+      cache_control: {
+        type: 'ephemeral',
+      },
+    }),
+  });
+}
+
+function createClient(
+  config?: LlmProviderConfig,
+  contextCache?: ContextCacheConfig,
+): OpenRouter | undefined {
   const resolved = resolveLlmClient(config, readLlmEnv());
   if (!resolved) {
     return undefined;
@@ -300,20 +345,26 @@ function createClient(config?: LlmProviderConfig): OpenRouter | undefined {
   if (resolved.serverURL) {
     options.serverURL = resolved.serverURL;
   }
-  if (resolved.cache) {
-    // Inject `X-OpenRouter-Cache: true` on every request so the upstream serves
-    // identical model calls from cache without re-billing (deterministic re-runs).
-    return new OpenRouter({
-      ...options,
-      hooks: {
-        beforeRequest: (_ctx, request) => {
-          request.headers.set('X-OpenRouter-Cache', 'true');
-          return request;
-        },
-      },
-    });
+
+  // A cache write costs more than a plain read, so the breakpoint only pays off
+  // when something is holding the prefix still — which is what anchoring does.
+  const wantsBreakpoint = contextCache?.enabled !== false;
+  if (!resolved.cache && !wantsBreakpoint) {
+    return new OpenRouter(options);
   }
-  return new OpenRouter(options);
+  return new OpenRouter({
+    ...options,
+    hooks: {
+      beforeRequest: async (_ctx, request) => {
+        if (resolved.cache) {
+          // Serve identical model calls from OpenRouter's own response cache
+          // without re-billing (deterministic re-runs).
+          request.headers.set('X-OpenRouter-Cache', 'true');
+        }
+        return wantsBreakpoint ? addCacheBreakpoint(request) : request;
+      },
+    },
+  });
 }
 
 //#region AgentHarness
@@ -378,6 +429,8 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
   readonly layerStateStore: LayerStateStore;
   /** Per-harness memoization cache for `recallMode: 'eventual'` layers. */
   readonly recallCache: RecallCache;
+  /** Per-harness pinned anchor output and epoch bookkeeping, keyed by cache lineage. */
+  readonly contextCache: ContextCacheStore;
   /**
    * Execution ids whose layer `init` hooks have already run, so repeated/nested
    * `run()` calls and the session turn path never re-init (which would clobber
@@ -409,6 +462,7 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
       strictItemSchemas: opts.strictItemSchemas ?? true,
       projection: opts.projection,
       forceAtomicRecall: opts.forceAtomicRecall,
+      contextCache: opts.contextCache,
     };
     this.fs = opts.fs ?? createInMemoryFsAdapter();
     this.shell = opts.shell ?? createInMemoryShellAdapter();
@@ -424,7 +478,7 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
     this.harnessTools = opts.tools ?? [];
     this._contextLayers = resolveContextOption(opts);
     this.callModelOverride = opts._testCallModel;
-    this.client = opts._testCallModel ? undefined : createClient(opts.llm);
+    this.client = opts._testCallModel ? undefined : createClient(opts.llm, opts.contextCache);
     this.channelStore = new ChannelStore();
     this.traceExporter = opts.traceExporter ?? new NoopExporter();
     this.layerStateStore =
@@ -433,6 +487,7 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
         console.warn(`[noetic] context layer '${layerId}' ${hook} error:`, error);
       });
     this.recallCache = createRecallCache();
+    this.contextCache = createContextCacheStore();
     this.defaultDeliveryMode = opts.defaultDeliveryMode ?? 'next-turn';
     this.streamIdleTimeoutMs = opts.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
     this.itemSchemas = new ItemSchemaRegistry(opts.itemSchemas, {
@@ -976,14 +1031,34 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
     try {
       await this.ensureLayersInit(ctx);
       const recallResults = await this.recallLayers(layers, '', ctx);
-      const layerOutputItems = recallResults.flatMap((r) => r.items);
-      if (layerOutputItems.length === 0) {
+      // Band the output the way a real turn would, but read-only: a preview
+      // must not pin, count churn, or age the epoch, or looking at a
+      // conversation would change what the next turn sends.
+      const banded = await prepareBandedView({
+        recallResults,
+        layers,
+        execCtx: contextToExecCtx(ctx),
+        store: this.contextCache,
+        config: this.config.contextCache,
+        instructions: undefined,
+        policy: this.config.projection ?? DEFAULT_PROJECTION,
+        systemPromptItems: [],
+        budgets: new Map(),
+        readOnly: true,
+      });
+      if (
+        banded.anchorItems.length === 0 &&
+        banded.liveItems.length === 0 &&
+        banded.deltaItems.length === 0
+      ) {
         return historyItems;
       }
       return assembleView({
         systemPromptItems: [],
-        layerOutputItems,
+        layerOutputItems: banded.anchorItems,
         historyItems,
+        liveLayerItems: banded.liveItems,
+        deltaItems: banded.deltaItems,
       });
     } finally {
       await this.layerStateStore.flush?.(ctx.id);

@@ -26,10 +26,14 @@ import {
   commitLayerUsage,
   computeLayerUsage,
   contextToExecCtx,
+  createContextCacheStore,
   DEFAULT_PROJECTION,
   defaultItemSchemaRegistry,
   emitFrameworkEvent,
   getBroadcaster,
+  lineageKey,
+  noteCacheOutcome,
+  resolveCacheConfig,
   resolveLayerTools,
   returnLayers,
   shouldEmit,
@@ -46,6 +50,7 @@ import type {
   ExecuteStepFn,
   ExecutionContext,
   FunctionCallItem,
+  InputMessageItem,
   Item,
   ProjectionPolicy,
   RecallLayerOutput,
@@ -62,6 +67,7 @@ import type {
 import { isServerToolSpec, SteeringAction } from './action-types';
 import { cloneWithGuard } from './clone-guard';
 import { collectAllTools, deduplicateTools } from './collect-tools';
+import { prepareBandedView, stampAnchoringAttributes } from './context-assembly';
 import { trackUsage } from './message-helpers';
 import {
   getContextChannelStore,
@@ -542,9 +548,32 @@ export async function executeLLM<TContext, I, O>(
       );
     }
   }
-  const layerOutputItems: Item[] = recallResults.flatMap((r) => r.items);
+  // Split recall output into the cache-stable anchor band and the live band,
+  // replaying pinned anchors and gathering any changes into one supersede
+  // message. Runs once, outside the retry loop, for the same reason recall does:
+  // a retry replays this view rather than building a new one.
+  // A harness that predates anchoring carries no store. Give it a throwaway:
+  // nothing survives the turn, so its layers render fresh every time — the
+  // behaviour it had before the bands existed.
+  const cacheStore = baseCtx.harness.contextCache ?? createContextCacheStore();
+  const banded = await prepareBandedView({
+    recallResults,
+    layers: layers ?? [],
+    execCtx: contextToExecCtx(baseCtx),
+    store: cacheStore,
+    config: baseCtx.harness.config.contextCache,
+    instructions: resolvedInstructions,
+    policy: viewPolicy,
+    systemPromptItems: [],
+    budgets: budgetMap,
+  });
+  stampAnchoringAttributes(baseCtx.span, banded);
 
   let retries = 0;
+  // Guidance from a steering retry rides at the very end of the view, after the
+  // live band and the supersedes, rather than wherever history happens to put it.
+  let steeringTail: InputMessageItem[] = [];
+  let cacheJudged = false;
 
   while (retries <= MAX_STEERING_RETRIES) {
     const rawHistoryItems: ReadonlyArray<Item> = baseCtx.itemLog.items;
@@ -557,17 +586,26 @@ export async function executeLLM<TContext, I, O>(
       // budget (drops highest-slot layer output, then oldest history).
       const systemItems: Item[] = [];
       const nonSystemHistory: Item[] = [];
+      const tailIds = new Set(steeringTail.map((i) => i.id));
       for (const item of projectedHistoryItems) {
         if (item.type === 'message' && item.role === 'system') {
           systemItems.push(item);
+          continue;
+        }
+        // Steering guidance is re-placed at the tail; skip it here so the retry
+        // does not see the same correction twice.
+        if ('id' in item && typeof item.id === 'string' && tailIds.has(item.id)) {
           continue;
         }
         nonSystemHistory.push(item);
       }
       assembledItems = assembleView({
         systemPromptItems: systemItems,
-        layerOutputItems,
+        layerOutputItems: banded.anchorItems,
         historyItems: nonSystemHistory,
+        liveLayerItems: banded.liveItems,
+        deltaItems: banded.deltaItems,
+        tailItems: steeringTail,
         policy: viewPolicy,
       });
     } else {
@@ -622,6 +660,24 @@ export async function executeLLM<TContext, I, O>(
     // tokens accumulate across all LLM calls).
     trackUsage(baseCtx, response);
 
+    // Ask the model's own token report whether the prompt prefix survived. A
+    // clear miss records a re-anchor that the next assembly picks up — pins are
+    // never touched here, so a response steering later rejects cannot leave the
+    // epoch half-rebuilt.
+    // Judged once per assembly, not once per call: a steering retry re-sends
+    // the same view, so counting its response again would reach the give-up
+    // threshold inside a single turn and blind the lineage for good.
+    if (banded.epoch && !cacheJudged) {
+      cacheJudged = true;
+      noteCacheOutcome({
+        store: cacheStore,
+        key: lineageKey(contextToExecCtx(baseCtx)),
+        response,
+        config: resolveCacheConfig(baseCtx.harness.config.contextCache),
+        expectedTokens: systemPromptTokens + banded.epoch.anchorTokens,
+      });
+    }
+
     // An abort that landed mid-call returns whatever rounds completed before
     // the signal fired. The spend is charged above, but a truncated generation
     // is not this step's output — surface cancellation instead.
@@ -643,9 +699,19 @@ export async function executeLLM<TContext, I, O>(
       }
 
       if (decision.action === SteeringAction.Guide && retries < MAX_STEERING_RETRIES) {
-        baseCtx.itemLog.append(
-          createMessage(decision.guidance ?? 'Please adjust your response.', 'developer'),
+        const guidance = createMessage(
+          decision.guidance ?? 'Please adjust your response.',
+          'developer',
         );
+        // Logged so it persists into the conversation, and carried as the tail
+        // so the retry's view ends on the correction rather than burying it
+        // ahead of the live band. Assembly drops it from history to avoid
+        // showing it twice.
+        baseCtx.itemLog.append(guidance);
+        steeringTail = [
+          ...steeringTail,
+          guidance,
+        ];
         retries++;
         continue;
       }
@@ -677,7 +743,11 @@ export async function executeLLM<TContext, I, O>(
         modelId: resolvedModel,
         instructions: resolvedInstructions,
         tools: resolvedTools,
-        recallResults,
+        // What the model was actually shown, pinned replays included — raw
+        // recall output would report content it never saw.
+        recallResults: banded.servedPerLayer,
+        serveInfo: banded.serveInfo,
+        epoch: banded.epoch,
       }),
     );
 
