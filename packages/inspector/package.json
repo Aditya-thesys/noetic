@@ -7,15 +7,20 @@
     "dev": "next dev --turbopack -p 3900",
     "start": "bun server/host.ts",
     "test": "bun test test/",
+    "test:coverage": "bun test test/ --coverage --coverage-reporter=text --coverage-reporter=lcov",
+    "test:ci": "bun test test/ --coverage --coverage-reporter=lcov",
     "typecheck": "tsc --noEmit && tsc --noEmit -p server/tsconfig.json"
   },
   "dependencies": {
+    "@dagrejs/dagre": "3.1.0",
     "@noetic-tools/core": "workspace:*",
     "@noetic-tools/platform-node": "workspace:*",
     "@willbooster/monaco-react": "2.0.0",
+    "@xyflow/react": "12.11.2",
     "next": "16.1.6",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "zod": "4.3.6",
     "zustand": "5.0.14"
   },
   "devDependencies": {
@@ -26,7 +31,6 @@
     "bun-types": "latest",
     "postcss": "8.5.4",
     "tailwindcss": "4.1.8",
-    "typescript": "5.8.3",
-    "zod": "4.3.6"
+    "typescript": "5.8.3"
   }
 }

@@ -16,10 +16,12 @@ import { ContextWindowTab } from './ContextWindowTab';
 import { EventsTab } from './EventsTab';
 import { LayerTab } from './LayerTab';
 import { TraceTab } from './TraceTab';
+import { WorkflowTab } from './WorkflowTab';
 
 const FIXED_TABS = [
   'Context',
   'Composition',
+  'Workflow',
   'Events',
   'Console',
   'Trace',
@@ -68,6 +70,7 @@ export function InspectorTabs() {
       <div className="min-h-0 flex-1">
         {active === 'Context' && <ContextWindowTab />}
         {active === 'Composition' && <CompositionTab />}
+        {active === 'Workflow' && <WorkflowTab />}
         {active === 'Events' && <EventsTab />}
         {active === 'Console' && <ConsoleTab />}
         {active === 'Trace' && <TraceTab />}
