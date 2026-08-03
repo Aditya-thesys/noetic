@@ -103,7 +103,7 @@ export const viewport = {
     },
     {
       media: '(prefers-color-scheme: light)',
-      color: '#050505',
+      color: '#fbfbfa',
     },
   ],
 };

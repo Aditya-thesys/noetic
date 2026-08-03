@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 
-const GREEN = '#39ff14';
-const CYAN = '#38bdf8';
-const SURFACE = '#080808';
-const BORDER_COLOR = '#1a1a1a';
+const GREEN = 'var(--color-tui-green)';
+const CYAN = 'var(--color-tui-cyan)';
+const SURFACE = 'var(--color-tui-surface)';
+const BORDER_COLOR = 'var(--color-tui-border)';
 
 const LAYER_X = 110;
 const LAYER_W = 258;
@@ -88,7 +88,7 @@ function LayerPanel({ index }: { index: number }): ReactNode {
         x={LAYER_X + LAYER_W / 2}
         y={midY + 1}
         textAnchor="middle"
-        fill="#94a3b8"
+        fill="var(--color-tui-secondary)"
         fontSize="9"
         fontFamily="JetBrains Mono, monospace"
         fontWeight="700"
@@ -100,7 +100,7 @@ function LayerPanel({ index }: { index: number }): ReactNode {
         x={LAYER_X + LAYER_W / 2}
         y={midY + 12}
         textAnchor="middle"
-        fill="#475569"
+        fill="var(--color-tui-muted)"
         fontSize="7.5"
         fontFamily="JetBrains Mono, monospace"
       >
@@ -334,7 +334,7 @@ export function ContextIsometricSvg(): ReactNode {
         x={(LAYER_X * 2 + LAYER_W) / 2}
         y={275}
         textAnchor="middle"
-        fill="#475569"
+        fill="var(--color-tui-muted)"
         fontSize="8"
         fontFamily="JetBrains Mono, monospace"
       >

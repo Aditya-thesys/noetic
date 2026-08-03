@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 
-const GREEN = '#39ff14';
-const CYAN = '#38bdf8';
-const AMBER = '#ffb000';
-const MUTED = '#475569';
-const SURFACE = '#080808';
-const BORDER_COLOR = '#1a1a1a';
+const GREEN = 'var(--color-tui-green)';
+const CYAN = 'var(--color-tui-cyan)';
+const AMBER = 'var(--color-tui-amber)';
+const MUTED = 'var(--color-tui-muted)';
+const SURFACE = 'var(--color-tui-surface)';
+const BORDER_COLOR = 'var(--color-tui-border)';
 
 // Grid: minimum 28px spacing ensures 25px+ line segments
 const NODE_W = 72;
@@ -136,7 +136,7 @@ function ContextLayerNode({
         x={x + w / 2}
         y={midY + 1}
         textAnchor="middle"
-        fill="#94a3b8"
+        fill="var(--color-tui-secondary)"
         fontSize="8"
         fontFamily="JetBrains Mono, monospace"
         fontWeight="700"

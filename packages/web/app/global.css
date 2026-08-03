@@ -2,7 +2,29 @@
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
 
+/* Light is the default so it matches fumadocs, whose own palette is light at
+   `:root` and dark under `.dark`. Every dark value is overridden in the `.dark`
+   block below — keep the two lists in step. */
 @theme {
+  --color-tui-bg: #fbfbfa;
+  --color-tui-bg-deep: #efefec;
+  --color-tui-surface: #ffffff;
+  --color-tui-surface-2: #f6f6f3;
+  --color-tui-surface-hover: #eeeeea;
+  --color-tui-fg: #0f1115;
+  --color-tui-secondary: #475569;
+  --color-tui-muted: #6b7482;
+  --color-tui-faint: #c2c8d0;
+  --color-tui-green: #0a7f2e;
+  --color-tui-amber: #a35a06;
+  --color-tui-cyan: #0369a1;
+  --color-tui-magenta: #be1a7e;
+  --color-tui-border: #e2e2dd;
+  --color-tui-border-bright: #c9c9c2;
+  --radius: 4px;
+}
+
+.dark {
   --color-tui-bg: #050505;
   --color-tui-bg-deep: #020202;
   --color-tui-surface: #0a0a0a;
@@ -13,15 +35,11 @@
   --color-tui-muted: #475569;
   --color-tui-faint: #2a2f3a;
   --color-tui-green: #39ff14;
-  --color-tui-green-deep: #14532d;
   --color-tui-amber: #ffb000;
-  --color-tui-amber-deep: #4a2c00;
   --color-tui-cyan: #38bdf8;
   --color-tui-magenta: #ff4dcb;
   --color-tui-border: #1a1a1a;
   --color-tui-border-bright: #2a2a2a;
-  --color-tui-highlight: #1a1a2e;
-  --radius: 4px;
 }
 
 :root {
@@ -32,6 +50,46 @@
   --spacing-xl: 48px;
   --spacing-2xl: 80px;
   --font-serif: "Instrument Serif", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+
+  /* CRT dressing. A glow reads as emitted light, which only works on a dark
+     screen — light mode turns the halos off and keeps just the tint. */
+  --tui-glow-green: none;
+  --tui-glow-amber: none;
+  --tui-glow-cyan: none;
+  --tui-glow-headline: none;
+  --tui-crt-wash:
+    radial-gradient(
+      ellipse 80% 50% at 50% -10%,
+      color-mix(in srgb, var(--color-tui-green) 5%, transparent) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 80% 50% at 50% 120%,
+      color-mix(in srgb, var(--color-tui-cyan) 4%, transparent) 0%,
+      transparent 50%
+    );
+  --tui-crt-scanline: rgba(0, 0, 0, 0.022);
+  --tui-crt-vignette: rgba(0, 0, 0, 0.06);
+  --tui-crt-blend: multiply;
+  --tui-chrome-bg: rgba(251, 251, 250, 0.82);
+  --tui-halo-green: none;
+  --tui-halo-green-soft: none;
+}
+
+.dark {
+  --tui-glow-green: 0 0 10px rgba(57, 255, 20, 0.5), 0 0 22px rgba(57, 255, 20, 0.25);
+  --tui-glow-amber: 0 0 10px rgba(255, 176, 0, 0.5), 0 0 22px rgba(255, 176, 0, 0.25);
+  --tui-glow-cyan: 0 0 10px rgba(56, 189, 248, 0.5), 0 0 22px rgba(56, 189, 248, 0.25);
+  --tui-glow-headline: 0 0 18px rgba(57, 255, 20, 0.35), 0 0 36px rgba(57, 255, 20, 0.15);
+  --tui-crt-wash:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(57, 255, 20, 0.06) 0%, transparent 55%),
+    radial-gradient(ellipse 80% 50% at 50% 120%, rgba(56, 189, 248, 0.04) 0%, transparent 50%);
+  --tui-crt-scanline: rgba(255, 255, 255, 0.012);
+  --tui-crt-vignette: rgba(0, 0, 0, 0.5);
+  --tui-crt-blend: overlay;
+  --tui-chrome-bg: rgba(5, 5, 5, 0.8);
+  --tui-halo-green: 0 0 24px rgba(57, 255, 20, 0.25);
+  --tui-halo-green-soft: 0 0 40px rgba(57, 255, 20, 0.07);
 }
 
 @layer base {
@@ -66,9 +124,7 @@
     inset: 0;
     pointer-events: none;
     z-index: 1;
-    background:
-      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(57, 255, 20, 0.06) 0%, transparent 55%),
-      radial-gradient(ellipse 80% 50% at 50% 120%, rgba(56, 189, 248, 0.04) 0%, transparent 50%);
+    background: var(--tui-crt-wash);
   }
 
   body::after {
@@ -82,11 +138,11 @@
         0deg,
         transparent 0px,
         transparent 2px,
-        rgba(255, 255, 255, 0.012) 2px,
-        rgba(255, 255, 255, 0.012) 3px
+        var(--tui-crt-scanline) 2px,
+        var(--tui-crt-scanline) 3px
       ),
-      radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.5) 100%);
-    mix-blend-mode: overlay;
+      radial-gradient(ellipse at center, transparent 50%, var(--tui-crt-vignette) 100%);
+    mix-blend-mode: var(--tui-crt-blend);
   }
 
   main {
@@ -110,20 +166,15 @@
   }
 }
 
+/* Opacity alone — dimming the text dims its halo with it, so the flicker reads
+   the same as animating the shadow and it survives a themed (or absent) glow. */
 @keyframes phosphor-flicker {
   0%,
   100% {
     opacity: 1;
-    text-shadow:
-      0 0 4px rgba(57, 255, 20, 0.6),
-      0 0 18px rgba(57, 255, 20, 0.35),
-      0 0 32px rgba(57, 255, 20, 0.15);
   }
   3% {
     opacity: 0.92;
-    text-shadow:
-      0 0 4px rgba(57, 255, 20, 0.4),
-      0 0 18px rgba(57, 255, 20, 0.2);
   }
   6% {
     opacity: 1;
@@ -139,29 +190,27 @@
   }
 }
 
+/* The RGB-split offsets stay literal — they read as channel tearing in either
+   theme. Only the green halo is themed, since light mode has none. */
 @keyframes tui-glitch-burst {
   0% {
     opacity: 1;
     transform: translate(0, 0);
-    text-shadow:
-      0 0 10px rgba(57, 255, 20, 0.5),
-      0 0 22px rgba(57, 255, 20, 0.25);
+    text-shadow: var(--tui-glow-green);
   }
   6% {
     opacity: 0.85;
     transform: translate(2px, -1px);
     text-shadow:
-      -2px 0 rgba(255, 77, 203, 0.7),
-      2px 0 rgba(56, 189, 248, 0.7),
-      0 0 14px rgba(57, 255, 20, 0.5);
+      -2px 0 var(--color-tui-magenta),
+      2px 0 var(--color-tui-cyan);
   }
   14% {
     opacity: 0.55;
     transform: translate(-3px, 1px);
     text-shadow:
-      3px 0 rgba(255, 77, 203, 0.5),
-      -3px 0 rgba(56, 189, 248, 0.5),
-      0 0 8px rgba(57, 255, 20, 0.6);
+      3px 0 var(--color-tui-magenta),
+      -3px 0 var(--color-tui-cyan);
   }
   22% {
     opacity: 1;
@@ -177,9 +226,8 @@
     opacity: 0.85;
     transform: translate(1px, 0);
     text-shadow:
-      0 -2px rgba(255, 77, 203, 0.4),
-      0 2px rgba(56, 189, 248, 0.4),
-      0 0 12px rgba(57, 255, 20, 0.6);
+      0 -2px var(--color-tui-magenta),
+      0 2px var(--color-tui-cyan);
   }
   70% {
     opacity: 1;
@@ -187,9 +235,7 @@
   }
   100% {
     opacity: 1;
-    text-shadow:
-      0 0 10px rgba(57, 255, 20, 0.5),
-      0 0 22px rgba(57, 255, 20, 0.25);
+    text-shadow: var(--tui-glow-green);
   }
 }
 
@@ -222,7 +268,7 @@
   4% {
     transform: translateX(14px);
     opacity: 0.95;
-    text-shadow: -2px 0 rgba(255, 77, 203, 0.8);
+    text-shadow: -2px 0 var(--color-tui-magenta);
     clip-path: polygon(0 18%, 100% 18%, 100% 42%, 0 42%);
   }
   12% {
@@ -232,7 +278,7 @@
   20% {
     transform: translateX(-18px);
     opacity: 0.95;
-    text-shadow: 2px 0 rgba(56, 189, 248, 0.8);
+    text-shadow: 2px 0 var(--color-tui-cyan);
     clip-path: polygon(0 18%, 100% 18%, 100% 42%, 0 42%);
   }
   26% {
@@ -247,13 +293,13 @@
   60% {
     transform: translateX(-12px);
     opacity: 0.8;
-    text-shadow: 2px 0 rgba(56, 189, 248, 0.6);
+    text-shadow: 2px 0 var(--color-tui-cyan);
     clip-path: polygon(0 58%, 100% 58%, 100% 80%, 0 80%);
   }
   68% {
     transform: translateX(10px);
     opacity: 0.7;
-    text-shadow: -2px 0 rgba(255, 77, 203, 0.6);
+    text-shadow: -2px 0 var(--color-tui-magenta);
     clip-path: polygon(0 58%, 100% 58%, 100% 80%, 0 80%);
   }
   74% {
@@ -298,28 +344,19 @@
 
 .tui-phosphor {
   animation: phosphor-flicker 6s linear infinite;
-  text-shadow:
-    0 0 4px rgba(57, 255, 20, 0.6),
-    0 0 18px rgba(57, 255, 20, 0.35),
-    0 0 32px rgba(57, 255, 20, 0.15);
+  text-shadow: var(--tui-glow-green);
 }
 
 .tui-glow {
-  text-shadow:
-    0 0 10px rgba(57, 255, 20, 0.5),
-    0 0 22px rgba(57, 255, 20, 0.25);
+  text-shadow: var(--tui-glow-green);
 }
 
 .tui-glow-amber {
-  text-shadow:
-    0 0 10px rgba(255, 176, 0, 0.5),
-    0 0 22px rgba(255, 176, 0, 0.25);
+  text-shadow: var(--tui-glow-amber);
 }
 
 .tui-glow-cyan {
-  text-shadow:
-    0 0 10px rgba(56, 189, 248, 0.5),
-    0 0 22px rgba(56, 189, 248, 0.25);
+  text-shadow: var(--tui-glow-cyan);
 }
 
 .tui-pulse {
@@ -375,13 +412,19 @@
   pointer-events: none;
 }
 
+/* Each cell rings itself; neighbouring rings meet inside the 1px gap to form a
+   single hairline, and the outermost ones close the frame. The older trick —
+   a gap over a coloured container — also painted the empty slots left when the
+   last row doesn't fill, which on a light background is a stray grey block. */
 .tui-bento {
   display: grid;
   gap: 1px;
-  background: var(--color-tui-border);
-  border: 1px solid var(--color-tui-border);
   width: 100%;
   min-width: 0;
+}
+
+.tui-bento > * {
+  box-shadow: 0 0 0 1px var(--color-tui-border);
 }
 
 .tui-bento > [data-col-span="2"] {
@@ -592,13 +635,17 @@
   gap: 8px;
   padding: 10px 24px;
   background:
-    linear-gradient(rgba(245, 158, 11, 0.09), rgba(245, 158, 11, 0.09)), rgba(5, 5, 5, 0.88);
+    linear-gradient(
+      color-mix(in srgb, var(--color-tui-amber) 9%, transparent),
+      color-mix(in srgb, var(--color-tui-amber) 9%, transparent)
+    ),
+    var(--tui-chrome-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(245, 158, 11, 0.25);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-tui-amber) 25%, transparent);
   font-size: 12px;
   letter-spacing: 0.05em;
-  color: rgb(245, 158, 11);
+  color: var(--color-tui-amber);
 }
 
 .announcement-banner .banner-title {
@@ -612,11 +659,11 @@
 .announcement-banner .banner-link {
   margin-left: 4px;
   padding: 2px 8px;
-  border: 1px solid rgba(245, 158, 11, 0.4);
+  border: 1px solid color-mix(in srgb, var(--color-tui-amber) 40%, transparent);
   border-radius: 3px;
   font-size: 11px;
   font-weight: 600;
-  color: rgb(245, 158, 11);
+  color: var(--color-tui-amber);
   text-decoration: none;
 }
 
@@ -630,7 +677,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 24px;
-  background: rgba(5, 5, 5, 0.8);
+  background: var(--tui-chrome-bg);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--color-tui-border);
 }
@@ -949,9 +996,7 @@
 .code-display-headline em {
   font-style: italic;
   color: var(--color-tui-green);
-  text-shadow:
-    0 0 18px rgba(57, 255, 20, 0.35),
-    0 0 36px rgba(57, 255, 20, 0.15);
+  text-shadow: var(--tui-glow-headline);
 }
 
 .code-stack-grid {

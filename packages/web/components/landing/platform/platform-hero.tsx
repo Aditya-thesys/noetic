@@ -106,10 +106,10 @@ export function PlatformHero(): ReactNode {
               fontSize: '11px',
               letterSpacing: '0.16em',
               padding: '4px 10px',
-              background: 'rgba(245, 158, 11, 0.15)',
-              border: '1px solid rgba(245, 158, 11, 0.4)',
+              background: 'color-mix(in srgb, var(--color-tui-amber) 15%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--color-tui-amber) 40%, transparent)',
               borderRadius: '4px',
-              color: 'rgb(245, 158, 11)',
+              color: 'var(--color-tui-amber)',
               textTransform: 'uppercase',
               fontWeight: 600,
             }}
@@ -295,7 +295,7 @@ export function PlatformHero(): ReactNode {
                   textDecoration: 'none',
                   borderRadius: '4px',
                   letterSpacing: '0.05em',
-                  boxShadow: '0 0 24px rgba(57, 255, 20, 0.25)',
+                  boxShadow: 'var(--tui-halo-green)',
                 }}
               >
                 Open the dashboard →

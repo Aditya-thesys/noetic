@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
 
-const GREEN = '#39ff14';
-const CYAN = '#38bdf8';
-const AMBER = '#ffb000';
-const MUTED = '#475569';
-const SURFACE = '#080808';
+const GREEN = 'var(--color-tui-green)';
+const CYAN = 'var(--color-tui-cyan)';
+const AMBER = 'var(--color-tui-amber)';
+const MUTED = 'var(--color-tui-muted)';
+const SURFACE = 'var(--color-tui-surface)';
 
 // Grid system: 28px minimum spacing ensures 25px+ line segments
 // Horizontal = 28px, Diagonal = 28*sqrt(2) ≈ 40px
