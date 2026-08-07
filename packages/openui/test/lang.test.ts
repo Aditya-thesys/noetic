@@ -6,9 +6,11 @@ import {
   mergeDocument,
   OpenUiLangParser,
   parseDocument,
-  serializeAssignment,
+  resolveDocument,
   serializeDocument,
+  serializeStatement,
 } from '../src';
+import { testLibrary } from './_helpers';
 
 const SAMPLE = [
   '$tab = "overview"',
@@ -22,40 +24,30 @@ describe('parseDocument', () => {
   test('classifies statements and tracks root', () => {
     const doc = parseDocument(SAMPLE);
     expect(doc.root).toBe('root');
-    expect(documentState(doc).map((a) => a.ref)).toEqual([
+    expect(documentState(doc).map((s) => s.ref)).toEqual([
       '$tab',
     ]);
-    expect(documentData(doc).map((a) => a.ref)).toEqual([
+    expect(documentData(doc).map((s) => s.ref)).toEqual([
       'sales',
       'save',
     ]);
-    expect(documentNodes(doc).map((a) => a.ref)).toEqual([
+    expect(documentNodes(doc).map((s) => s.ref)).toEqual([
       'chart',
       'root',
     ]);
     expect(doc.diagnostics).toEqual([]);
   });
 
-  test('parses expression forms: literals, refs, state, member, builtin calls', () => {
+  test('preserves each statement source verbatim (no expression parse)', () => {
     const doc = parseDocument(
       [
         'a = Text("with \\"escape\\" and, comma")',
-        'b = Progress(-12.5)',
-        'c = Card(data.rows.title, [true, false, null])',
         'action = Action([@Run(save), @Set($tab, "next")])',
       ].join('\n'),
     );
     expect(doc.diagnostics).toEqual([]);
-    const a = doc.assignments.a;
-    expect(a).toBeDefined();
-    if (a?.expr.kind !== 'call') {
-      throw new Error('expected call');
-    }
-    expect(a.expr.args[0]).toEqual({
-      kind: 'literal',
-      value: 'with "escape" and, comma',
-    });
-    expect(serializeAssignment(doc.assignments.action!)).toBe(
+    expect(serializeStatement(doc.statements.a!)).toBe('a = Text("with \\"escape\\" and, comma")');
+    expect(serializeStatement(doc.statements.action!)).toBe(
       'action = Action([@Run(save), @Set($tab, "next")])',
     );
   });
@@ -66,14 +58,14 @@ describe('parseDocument', () => {
         '```openui',
         'Sure! Here is your UI:',
         'root = Card("ok")',
-        'bad = Card(',
+        'bad',
         '```',
       ].join('\n'),
     );
     expect(doc.root).toBe('root');
-    // fence lines skipped silently; prose + unterminated statement → diagnostics
+    // fence lines skipped silently; prose + non-assignment line → diagnostics
     expect(doc.diagnostics.length).toBe(2);
-    expect(doc.assignments.bad).toBeUndefined();
+    expect(doc.statements.bad).toBeUndefined();
   });
 
   test('re-assignment replaces and moves ref to end of order', () => {
@@ -88,11 +80,7 @@ describe('parseDocument', () => {
       'b',
       'a',
     ]);
-    const a = doc.assignments.a;
-    if (a?.expr.kind !== 'call' || a.expr.args[0]?.kind !== 'literal') {
-      throw new Error('expected call with literal');
-    }
-    expect(a.expr.args[0].value).toBe('3');
+    expect(doc.statements.a?.source).toBe('a = Text("3")');
   });
 });
 
@@ -105,7 +93,7 @@ describe('OpenUiLangParser streaming', () => {
       ...parser.push('les")\nroot = St'),
       ...parser.push('ack([chart])\n'),
     ];
-    expect(completed.map((a) => a.ref)).toEqual([
+    expect(completed.map((s) => s.ref)).toEqual([
       'chart',
       'root',
     ]);
@@ -118,7 +106,7 @@ describe('OpenUiLangParser streaming', () => {
     const completed = [
       ...parser.push('root = Stack([\n  Text("a\\nb"),\n  Text("c")\n])\n'),
     ];
-    expect(completed.map((a) => a.ref)).toEqual([
+    expect(completed.map((s) => s.ref)).toEqual([
       'root',
     ]);
   });
@@ -159,10 +147,21 @@ describe('serializeDocument / mergeDocument', () => {
       'a',
       'b',
     ]);
-    const a = merged.assignments.a;
-    if (a?.expr.kind !== 'call' || a.expr.args[0]?.kind !== 'literal') {
-      throw new Error('expected call with literal');
-    }
-    expect(a.expr.args[0].value).toBe('2');
+    expect(merged.statements.a?.source).toBe('a = Text("2")');
+  });
+});
+
+describe('resolveDocument (delegates to @openuidev/lang-core)', () => {
+  test('resolves references and maps positional args to named props', () => {
+    const doc = parseDocument(SAMPLE);
+    const parsed = resolveDocument(doc, testLibrary().toJSONSchema());
+    expect(parsed.root?.typeName).toBe('Stack');
+    // `chart` reference is resolved inline into the root's children, positional
+    // args mapped to named props (`title`) — proof lang-core did the resolving
+    expect(JSON.stringify(parsed.root)).toContain('"title":"Sales"');
+    // $state and data bindings are extracted
+    expect(parsed.stateDeclarations.$tab).toBe('overview');
+    expect(parsed.queryStatements.map((q) => q.statementId)).toContain('sales');
+    expect(parsed.mutationStatements.map((m) => m.statementId)).toContain('save');
   });
 });

@@ -1,12 +1,20 @@
 /**
  * Component library model: `defineComponent` / `createLibrary`, the generated
  * system prompt, and document validation against the registered components.
+ *
+ * The library, its JSON schema, prompt generation, and structural validation
+ * are all delegated to `@openuidev/lang-core` — the source of truth for the
+ * OpenUI Lang language. This module is the thin Noetic-facing adapter: it keeps
+ * the renderer-free `defineComponent` shape agents use on the server and maps
+ * lang-core's structured parse errors back to Noetic's `UiValidationIssue`.
  */
 
+import type { Library, LibraryJSONSchema, ValidationError } from '@openuidev/lang-core';
+import * as langCore from '@openuidev/lang-core';
 import type { ZodObject, ZodRawShape } from 'zod';
 import { z } from 'zod';
-import type { UiAssignment, UiDocument, UiExpr } from './lang/document';
-import { OPENUI_LANG_DIALECT } from './lang/document';
+import type { ElementNode, UiDocument } from './lang/document';
+import { OPENUI_LANG_DIALECT, resolveDocument } from './lang/document';
 
 /** A prop schema as it appears in `ZodObject.shape` (Zod v4 core type). */
 type PropSchema = z.core.$ZodType;
@@ -42,15 +50,17 @@ export const BUILTIN_COMPONENTS = [
   'ToolView',
 ] as const;
 
-const BUILTIN_COMPONENT_SET: ReadonlySet<string> = new Set(BUILTIN_COMPONENTS);
-
 /** @public A registered component library — the vocabulary a surface renders. */
 export interface UiLibrary<N extends string = string> {
   dialect: string;
   components: ReadonlyMap<string, ComponentDefinition>;
   componentNames: readonly N[];
+  /** The underlying lang-core library (JSON schema, prompt, parser source). */
+  readonly core: Library;
   /** The generated component-library prompt appended to a step's instructions. */
   systemPrompt(): string;
+  /** The JSON Schema lang-core's parser uses for positional-to-named mapping. */
+  toJSONSchema(): LibraryJSONSchema;
 }
 
 /** @public Options for `createLibrary`. */
@@ -71,14 +81,28 @@ export function createLibrary<const D extends readonly ComponentDefinition[]>(
     components.set(def.name, def);
   }
   const dialect = options?.dialect ?? OPENUI_LANG_DIALECT;
+
+  // Bridge each renderer-free definition into a lang-core component. lang-core
+  // requires a description and props object; the `component` renderer is unused
+  // on the server, so it is left undefined.
+  const core = langCore.createLibrary({
+    components: definitions.map((def) =>
+      langCore.defineComponent({
+        name: def.name,
+        description: def.description ?? '',
+        props: def.props ?? z.object({}),
+        component: undefined,
+      }),
+    ),
+  });
+
   return {
     dialect,
     components,
     componentNames: definitions.map((d) => d.name),
-    systemPrompt: () =>
-      renderLibraryPrompt(dialect, [
-        ...components.values(),
-      ]),
+    core,
+    systemPrompt: () => core.prompt(),
+    toJSONSchema: () => core.toJSONSchema(),
   };
 }
 
@@ -88,7 +112,7 @@ export function createLibrary<const D extends readonly ComponentDefinition[]>(
 
 export interface PropSignature {
   name: string;
-  /** Human-readable type rendered into the prompt (`string`, `number`, `array`, …). */
+  /** Human-readable type rendered into diagnostics (`string`, `number`, …). */
   type: string;
   optional: boolean;
   schema: PropSchema;
@@ -134,35 +158,6 @@ function describeSchema(schema: PropSchema): string {
 
 //#endregion
 
-//#region Prompt generation
-
-function renderComponentLine(def: ComponentDefinition): string {
-  const props = componentProps(def)
-    .map((p) => `${p.name}${p.optional ? '?' : ''}: ${p.type}`)
-    .join(', ');
-  const doc = def.description ? ` — ${def.description}` : '';
-  return `- ${def.name}(${props})${doc}`;
-}
-
-function renderLibraryPrompt(dialect: string, definitions: ComponentDefinition[]): string {
-  return [
-    `Respond in OpenUI Lang (${dialect}): one assignment statement per line, \`name = Expression\`.`,
-    'Rules:',
-    '- Components: `ref = Component(arg1, arg2, ...)` — positional args map to props in signature order.',
-    '- The statement assigned to `root` is the rendered root.',
-    '- Reactive state: `$name = defaultValue`. Passing `$name` to an input two-way binds it.',
-    '- Data: `ref = Query("tool_name", { args })` fetches on load and when referenced `$vars` change; `ref = Mutation("tool_name", { args })` runs only via `@Run(ref)`.',
-    '- Actions: `Action([@Run(ref), @Set($var, value), @ToAssistant("message")])` — steps run sequentially.',
-    '- Reference other statements by their `ref`. Member access plucks fields (`data.rows.title`).',
-    '- Emit only OpenUI Lang statements — no prose, no code fences.',
-    '',
-    'Available components:',
-    ...definitions.map(renderComponentLine),
-  ].join('\n');
-}
-
-//#endregion
-
 //#region Validation
 
 /** @public One problem found validating a document against a library. */
@@ -172,118 +167,115 @@ export interface UiValidationIssue {
   message: string;
 }
 
-function collectCalls(
-  expr: UiExpr,
-  out: Array<
-    Extract<
-      UiExpr,
-      {
-        kind: 'call';
-      }
-    >
-  >,
-): void {
-  switch (expr.kind) {
-    case 'call':
-      if (!expr.builtin) {
-        out.push(expr);
-      }
-      for (const arg of expr.args) {
-        collectCalls(arg, out);
-      }
-      return;
-    case 'array':
-      for (const item of expr.items) {
-        collectCalls(item, out);
-      }
-      return;
-    case 'member':
-      collectCalls(expr.base, out);
-      return;
-    case 'object':
-      for (const entry of expr.entries) {
-        collectCalls(entry.value, out);
-      }
-      return;
+/** Map a lang-core structural parse error to a Noetic validation issue. */
+function fromParseError(error: ValidationError): UiValidationIssue {
+  const ref = error.statementId ?? '';
+  switch (error.code) {
+    case 'unknown-component':
+      return {
+        ref,
+        component: error.component,
+        message: `unknown component '${error.component}'`,
+      };
+    case 'excess-args':
+      return {
+        ref,
+        component: error.component,
+        message: `too many arguments: ${error.message}`,
+      };
+    case 'missing-required':
+    case 'null-required':
+      return {
+        ref,
+        component: error.component,
+        message: `prop '${error.path.replace(/^\//, '')}' is required`,
+      };
     default:
-      return;
+      return {
+        ref,
+        component: error.component,
+        message: error.message,
+      };
   }
 }
 
-function validateCall(
-  assignment: UiAssignment,
-  call: Extract<
-    UiExpr,
-    {
-      kind: 'call';
-    }
-  >,
+/** Walk the resolved tree, checking each element's static props against its schema. */
+function collectPropIssues(
   library: UiLibrary,
-): UiValidationIssue[] {
-  if (BUILTIN_COMPONENT_SET.has(call.fn)) {
-    return [];
-  }
-  const def = library.components.get(call.fn);
-  if (!def) {
-    return [
-      {
-        ref: assignment.ref,
-        component: call.fn,
-        message: `unknown component '${call.fn}'`,
-      },
-    ];
-  }
-  const props = componentProps(def);
-  const issues: UiValidationIssue[] = [];
-  if (call.args.length > props.length) {
-    issues.push({
-      ref: assignment.ref,
-      component: call.fn,
-      message: `too many arguments: got ${call.args.length}, signature has ${props.length}`,
-    });
-  }
-  call.args.forEach((arg, i) => {
-    const prop = props[i];
-    if (!prop || arg.kind !== 'literal') {
-      return; // refs/state/calls are dynamic — validated at runtime, not statically
+  node: ElementNode,
+  issues: UiValidationIssue[],
+): void {
+  const def = library.components.get(node.typeName);
+  if (def?.props) {
+    const ref = node.statementId ?? library.core.root ?? '';
+    for (const [name, value] of Object.entries(node.props)) {
+      // Dynamic values (refs, `$state`, nested calls) resolve at render time —
+      // lang-core leaves them as AST nodes, which are unverifiable statically.
+      if (isDynamic(value)) {
+        continue;
+      }
+      const shape = def.props.shape[name];
+      if (!shape) {
+        continue;
+      }
+      const parsed = z.safeParse(shape, value);
+      if (!parsed.success) {
+        issues.push({
+          ref,
+          component: node.typeName,
+          message: `prop '${name}' rejects ${JSON.stringify(value)}: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+        });
+      }
     }
-    const parsed = z.safeParse(prop.schema, arg.value);
-    if (!parsed.success) {
-      issues.push({
-        ref: assignment.ref,
-        component: call.fn,
-        message: `prop '${prop.name}' rejects ${JSON.stringify(arg.value)}: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
-      });
+  }
+  for (const value of Object.values(node.props)) {
+    walkChildElements(value, (child) => collectPropIssues(library, child, issues));
+  }
+}
+
+function isDynamic(value: unknown): boolean {
+  if (value !== null && typeof value === 'object' && 'k' in value) {
+    return true; // a lang-core AST node — resolved at render time
+  }
+  return false;
+}
+
+function isElementNode(value: unknown): value is ElementNode {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in value &&
+    value.type === 'element' &&
+    'typeName' in value &&
+    typeof value.typeName === 'string'
+  );
+}
+
+function walkChildElements(value: unknown, visit: (node: ElementNode) => void): void {
+  if (isElementNode(value)) {
+    visit(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      walkChildElements(item, visit);
     }
-  });
-  return issues;
+  }
 }
 
 /**
  * Validate every component call in a document against the library: unknown
- * components, arity overflow, and literal prop mismatches. Dynamic args
- * (refs, `$state`, nested calls) are skipped — they resolve at render time.
+ * components, arity overflow, missing required props, and literal prop
+ * mismatches. Dynamic args (refs, `$state`, nested calls) are skipped — they
+ * resolve at render time. Structural checks come from lang-core's parser;
+ * literal value checks use the library's own Zod schemas.
  * @public
  */
 export function validateDocument(library: UiLibrary, doc: UiDocument): UiValidationIssue[] {
-  const issues: UiValidationIssue[] = [];
-  for (const ref of doc.order) {
-    const assignment = doc.assignments[ref];
-    if (!assignment) {
-      continue;
-    }
-    const calls: Array<
-      Extract<
-        UiExpr,
-        {
-          kind: 'call';
-        }
-      >
-    > = [];
-    collectCalls(assignment.expr, calls);
-    for (const call of calls) {
-      issues.push(...validateCall(assignment, call, library));
-    }
+  const parsed = resolveDocument(doc, library.toJSONSchema());
+  const issues: UiValidationIssue[] = parsed.meta.errors.map(fromParseError);
+  if (parsed.root) {
+    collectPropIssues(library, parsed.root, issues);
   }
   return issues;
 }
