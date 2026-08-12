@@ -1,3 +1,7 @@
+## @noetic-tools/context-v1.2.1 (2026-08-12)
+
+* feat!: unify Noetic public API naming (#68) ([38cb18f](https://github.com/mattapperson/noetic/commit/38cb18f)), closes [#68](https://github.com/mattapperson/noetic/issues/68)
+
 ## @noetic-tools/context-v1.2.0 (2026-08-03)
 
 * feat(context): band the assembled view and pin anchored layers ([9fa94f4](https://github.com/mattapperson/noetic/commit/9fa94f4))
