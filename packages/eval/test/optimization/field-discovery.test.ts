@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { Step, Tool } from '@noetic-tools/core';
-import { branch, spawn, step } from '@noetic-tools/core';
+import type { Step, SubHarness, SubHarnessKind, SubHarnessSession, Tool } from '@noetic-tools/core';
+import { callModel, loop, schedule, spawn, step, until, withContext } from '@noetic-tools/core';
 import { z } from 'zod';
 import { discoverFields, enrichWithSourceLocations } from '../../src/optimization/field-discovery';
 import { OptimizeScope } from '../../src/types/eval';
@@ -34,15 +34,42 @@ function makeMockTool(name: string, description: string): Tool {
   };
 }
 
+function mockSubHarness(kind: SubHarnessKind): SubHarness {
+  return {
+    specificationVersion: 'harness-v1',
+    harnessId: kind,
+    async doStart(): Promise<SubHarnessSession> {
+      return {
+        sessionId: 's',
+        isResume: false,
+        async doPromptTurn() {
+          return {
+            items: [],
+            text: '',
+          };
+        },
+        async doStop() {
+          return {
+            harnessId: kind,
+            sessionId: 's',
+            state: null,
+          };
+        },
+      };
+    },
+  };
+}
+
 describe('discoverFields', () => {
-  test('finds instructions field in StepLLM', () => {
-    const llmStep = step.llm({
+  test('finds instructions field in StepCallModel', () => {
+    const callModelStep: Step = {
+      kind: 'callModel',
       id: 'my-llm',
       model: 'test-model',
       instructions: 'You are a helpful assistant.',
-    });
+    };
 
-    const fields = discoverFields(llmStep);
+    const fields = discoverFields(callModelStep);
 
     expect(fields).toHaveLength(1);
     expect(fields[0].path).toBe('my-llm.instructions');
@@ -51,9 +78,9 @@ describe('discoverFields', () => {
     expect(fields[0].fieldKind).toBe(FieldKind.Instructions);
   });
 
-  test('finds tool name and description in StepLLM with tools', () => {
-    const llmStep: Step = {
-      kind: 'llm',
+  test('finds tool name and description in StepCallModel with tools', () => {
+    const callModelStep: Step = {
+      kind: 'callModel',
       id: 'llm-with-tools',
       model: 'test-model',
       instructions: 'Be helpful',
@@ -62,7 +89,7 @@ describe('discoverFields', () => {
       ],
     };
 
-    const fields = discoverFields(llmStep);
+    const fields = discoverFields(callModelStep);
 
     expect(fields).toHaveLength(3);
     expect(fields[0].fieldKind).toBe(FieldKind.Instructions);
@@ -72,9 +99,9 @@ describe('discoverFields', () => {
     expect(fields[2].value).toBe('search');
   });
 
-  test('finds tool name and description in StepTool', () => {
+  test('finds tool name and description in StepInvokeTool', () => {
     const toolStep: Step = {
-      kind: 'tool',
+      kind: 'invokeTool',
       id: 'calc-step',
       tool: makeMockTool('calculator', 'Perform calculations'),
     };
@@ -90,16 +117,17 @@ describe('discoverFields', () => {
     expect(fields[1].fieldKind).toBe(FieldKind.ToolName);
   });
 
-  test('recurses into StepSpawn wrapping a StepLLM', () => {
-    const llmStep = step.llm({
+  test('recurses into StepSpawn wrapping a StepCallModel', () => {
+    const callModelStep: Step = {
+      kind: 'callModel',
       id: 'inner-llm',
       model: 'test-model',
       instructions: 'Inner system prompt',
-    });
+    };
 
     const spawnStep = spawn({
       id: 'outer-spawn',
-      child: llmStep,
+      child: callModelStep,
     });
 
     const fields = discoverFields(spawnStep);
@@ -109,49 +137,211 @@ describe('discoverFields', () => {
     expect(fields[0].value).toBe('Inner system prompt');
   });
 
-  test('finds fields in branch _optimizable children', () => {
-    const llmStep = step.llm({
+  test('finds fields in conditional _optimizable children', () => {
+    const callModelStep: Step = {
+      kind: 'callModel',
       id: 'branch-llm',
       model: 'test-model',
       instructions: 'Branch system',
-    });
+    };
 
-    const branchStep = branch({
+    const conditionalStep: Step = {
+      kind: 'conditional',
       id: 'my-branch',
       route: () => null,
       _optimizable: [
-        llmStep,
+        callModelStep,
       ],
-    });
+    };
 
-    const fields = discoverFields(branchStep);
+    const fields = discoverFields(conditionalStep);
 
     expect(fields).toHaveLength(1);
     expect(fields[0].path).toBe('my-branch.branch-llm.instructions');
     expect(fields[0].value).toBe('Branch system');
   });
 
-  test('returns empty array for StepRun', () => {
-    const runStep = step.run({
+  test('returns empty array for StepRunCode', () => {
+    const runCodeStep: Step = {
+      kind: 'runCode',
       id: 'my-run',
       execute: async (input: unknown) => input,
-    });
+    };
 
-    const fields = discoverFields(runStep);
+    const fields = discoverFields(runCodeStep);
 
     expect(fields).toHaveLength(0);
   });
 
-  test('returns empty array for StepLLM without instructions or tools', () => {
-    const llmStep = step.llm({
+  test('returns empty array for StepCallModel without instructions or tools', () => {
+    const callModelStep: Step = {
+      kind: 'callModel',
       id: 'bare-llm',
       model: 'test-model',
-    });
+    };
 
-    const fields = discoverFields(llmStep);
+    const fields = discoverFields(callModelStep);
 
     expect(fields).toHaveLength(0);
   });
+});
+
+// Regression: `walkStep`'s switch silently fell through for composite kinds it
+// had no case for, so an agent rooted in one of them discovered ZERO optimizable
+// fields and `optimize()` reported success having optimized nothing. Every
+// composite kind must recurse into its children.
+describe('discoverFields composite recursion', () => {
+  function makeInnerCallModel(id: string): Step {
+    return callModel({
+      id,
+      model: 'test-model',
+      instructions: `Inner prompt for ${id}`,
+    });
+  }
+
+  test('recurses into withContext child', () => {
+    const wrapped = withContext({
+      id: 'provider',
+      child: makeInnerCallModel('ctx-llm'),
+      context: [],
+    });
+
+    const fields = discoverFields(wrapped);
+
+    expect(fields).toHaveLength(1);
+    expect(fields[0].path).toBe('provider.ctx-llm.instructions');
+    expect(fields[0].value).toBe('Inner prompt for ctx-llm');
+    expect(fields[0].fieldKind).toBe(FieldKind.Instructions);
+  });
+
+  test('recurses into every loop body step', () => {
+    const looped = loop({
+      id: 'my-loop',
+      steps: [
+        makeInnerCallModel('loop-llm-a'),
+        makeInnerCallModel('loop-llm-b'),
+      ],
+      until: until.maxSteps(1),
+    });
+
+    const fields = discoverFields(looped);
+
+    expect(fields.map((f) => f.path)).toEqual([
+      'my-loop.loop-llm-a.instructions',
+      'my-loop.loop-llm-b.instructions',
+    ]);
+  });
+
+  test('recurses into schedule body step', () => {
+    const scheduled = schedule({
+      id: 'my-schedule',
+      step: makeInnerCallModel('sched-llm'),
+      interval: 0,
+    });
+
+    const fields = discoverFields(scheduled);
+
+    expect(fields).toHaveLength(1);
+    expect(fields[0].path).toBe('my-schedule.sched-llm.instructions');
+    expect(fields[0].value).toBe('Inner prompt for sched-llm');
+  });
+
+  test('recurses through nested composites down to the leaf callModel', () => {
+    const nested = withContext({
+      id: 'provider',
+      child: loop({
+        id: 'inner-loop',
+        steps: [
+          spawn({
+            id: 'inner-spawn',
+            child: makeInnerCallModel('deep-llm'),
+          }),
+        ],
+        until: until.maxSteps(1),
+      }),
+      context: [],
+    });
+
+    const fields = discoverFields(nested);
+
+    expect(fields).toHaveLength(1);
+    expect(fields[0].path).toBe('provider.inner-loop.inner-spawn.deep-llm.instructions');
+  });
+});
+
+describe('discoverFields sub-harness step kinds', () => {
+  // Sub-harness prompts/instructions are `Lazy<string>` and the mutator passes
+  // these kinds through unchanged, so discovery must contribute no fields —
+  // surfacing them would produce candidates no mutator can apply. The point of
+  // these cases is that they are explicit no-ops, not silent fall-through.
+  const SUB_HARNESS_BUILDERS = [
+    {
+      kind: 'claude-code' as const,
+      build: (): Step =>
+        step.claudeCode({
+          id: 'cc',
+          harness: mockSubHarness('claude-code'),
+          prompt: 'do a thing',
+          instructions: 'Be terse',
+        }),
+    },
+    {
+      kind: 'codex' as const,
+      build: (): Step =>
+        step.codex({
+          id: 'cx',
+          harness: mockSubHarness('codex'),
+          prompt: 'do a thing',
+          instructions: 'Be terse',
+        }),
+    },
+    {
+      kind: 'opencode' as const,
+      build: (): Step =>
+        step.opencode({
+          id: 'oc',
+          harness: mockSubHarness('opencode'),
+          prompt: 'do a thing',
+          instructions: 'Be terse',
+        }),
+    },
+    {
+      kind: 'pi' as const,
+      build: (): Step =>
+        step.pi({
+          id: 'pi',
+          harness: mockSubHarness('pi'),
+          prompt: 'do a thing',
+          instructions: 'Be terse',
+        }),
+    },
+  ];
+
+  for (const { kind, build } of SUB_HARNESS_BUILDERS) {
+    test(`${kind} yields no fields without throwing`, () => {
+      expect(discoverFields(build())).toHaveLength(0);
+    });
+
+    test(`${kind} nested in a composite does not block sibling discovery`, () => {
+      const composite = loop({
+        id: 'mixed-loop',
+        steps: [
+          build(),
+          callModel({
+            id: 'sibling-llm',
+            model: 'test-model',
+            instructions: 'Sibling prompt',
+          }),
+        ],
+        until: until.maxSteps(1),
+      });
+
+      const fields = discoverFields(composite);
+
+      expect(fields).toHaveLength(1);
+      expect(fields[0].path).toBe('mixed-loop.sibling-llm.instructions');
+    });
+  }
 });
 
 describe('enrichWithSourceLocations', () => {
@@ -250,8 +440,8 @@ describe('enrichWithSourceLocations', () => {
 });
 
 describe('discoverFields scope filtering', () => {
-  const llmStep: Step = {
-    kind: 'llm',
+  const callModelStep: Step = {
+    kind: 'callModel',
     id: 'scoped-llm',
     model: 'test-model',
     instructions: 'You are helpful',
@@ -269,7 +459,7 @@ describe('discoverFields scope filtering', () => {
   }
 
   test('scope prompts-only returns System and ToolDescription but not ToolName', () => {
-    const fields = discoverFields(llmStep, undefined, OptimizeScope.PromptsOnly);
+    const fields = discoverFields(callModelStep, undefined, OptimizeScope.PromptsOnly);
 
     const kinds = fields.map((f) => f.fieldKind);
     expect(kinds).toContain(FieldKind.Instructions);
@@ -279,17 +469,17 @@ describe('discoverFields scope filtering', () => {
   });
 
   test('scope flow-structure returns all three field kinds', () => {
-    const fields = discoverFields(llmStep, undefined, OptimizeScope.FlowStructure);
+    const fields = discoverFields(callModelStep, undefined, OptimizeScope.FlowStructure);
     expectAllThreeKinds(fields);
   });
 
   test('scope full returns all three field kinds', () => {
-    const fields = discoverFields(llmStep, undefined, OptimizeScope.Full);
+    const fields = discoverFields(callModelStep, undefined, OptimizeScope.Full);
     expectAllThreeKinds(fields);
   });
 
   test('scope undefined returns all fields without filtering', () => {
-    const fields = discoverFields(llmStep, undefined, undefined);
+    const fields = discoverFields(callModelStep, undefined, undefined);
     expectAllThreeKinds(fields);
   });
 });

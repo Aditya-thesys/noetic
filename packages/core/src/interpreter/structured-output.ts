@@ -8,11 +8,11 @@ import {
 
 /**
  * JSON-parse + validate assistant text against a Standard Schema, raising
- * `llm_parse_error`. Shared by the LLM step and sub-harness step handlers.
+ * `model_parse_error`. Shared by the LLM step and sub-harness step handlers.
  *
  * Zod schemas keep the original `safeParse` error; other vendors' Standard
  * Schema issues are adapted into a synthetic `ZodError` of `custom` issues so
- * `llm_parse_error.zodError` stays a single error surface.
+ * `model_parse_error.zodError` stays a single error surface.
  */
 export async function parseStructuredOutput<O>(params: {
   schema: StandardSchemaV1;
@@ -25,7 +25,7 @@ export async function parseStructuredOutput<O>(params: {
     parsed = JSON.parse(rawText);
   } catch (e) {
     throw new NoeticErrorImpl({
-      kind: 'llm_parse_error',
+      kind: 'model_parse_error',
       stepId,
       raw: rawText,
       schema,
@@ -39,7 +39,7 @@ export async function parseStructuredOutput<O>(params: {
   const result = await validateSchema(schema, parsed);
   if (!result.success) {
     throw new NoeticErrorImpl({
-      kind: 'llm_parse_error',
+      kind: 'model_parse_error',
       stepId,
       raw: rawText,
       schema,

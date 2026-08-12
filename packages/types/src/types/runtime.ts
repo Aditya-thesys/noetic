@@ -21,16 +21,22 @@ export interface AgentHooks {
   afterStep?: (step: Step, result: unknown, ctx: Context) => Promise<void>;
 }
 
+/** @public Item-schema configuration: extension schemas plus validation strictness. */
+export interface ItemSchemaConfig {
+  /** Harness-wide item schema extensions used to validate emitted and returned items. */
+  schemas?: ItemSchemaExtensions;
+  /** Whether unknown extension item types must match a registered schema. Defaults to true. */
+  strict?: boolean;
+}
+
 /** @public Top-level configuration object that defines an agent's model, tools, context, and behavior. */
 export interface AgentConfig<TParams extends Record<string, unknown> = Record<string, unknown>> {
   name: string;
   storage?: StorageAdapter;
   hooks?: AgentHooks;
   params: TParams;
-  /** Harness-wide item schema extensions used to validate emitted and returned items. */
-  itemSchemas?: ItemSchemaExtensions;
-  /** Whether unknown extension item types must match a registered schema. Defaults to true. */
-  strictItemSchemas?: boolean;
+  /** Item schema extensions and validation strictness for emitted and returned items. */
+  itemSchemas?: ItemSchemaConfig;
   /** Default projection policy for all LLM steps. Individual steps override via `step.projection`. */
   projection?: ProjectionPolicy;
   /** When true, every layer is recalled atomically regardless of its `recallMode` (no eventual/cached recall). */
@@ -129,9 +135,7 @@ export interface ExecuteOptions {
   resourceId?: string;
   state?: unknown;
   /** Context layers to apply to the execution context. Overrides harness-level layers if provided. */
-  context?: ContextLayer[];
-  /** @deprecated Renamed to `context`. */
-  memory?: ContextLayer[];
+  contextLayers?: ContextLayer[];
   /** Override the harness's default delivery mode for this message only. */
   deliveryMode?: DeliveryMode;
   /**
@@ -162,6 +166,25 @@ export type HarnessStatus =
       readonly kind: 'aborting';
       readonly turnId: string;
     };
+
+//#endregion
+
+//#region Session Usage
+
+/** @public Cumulative token usage and cost a session has accumulated across all of its turns. */
+export interface SessionUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /** Undefined when no turn reported a cache figure, so callers can tell "provider says nothing about caching" from "nothing was cached". */
+  readonly cachedTokens?: number;
+  /**
+   * Undefined when the accumulated cost is zero. Unlike `cachedTokens` this
+   * cannot distinguish "no provider reported a cost" from "the work was free" —
+   * per-turn cost is a plain number that starts at 0, so there is no
+   * "unreported" signal to preserve.
+   */
+  readonly cost?: number;
+}
 
 //#endregion
 
@@ -229,6 +252,12 @@ export interface AgentHarnessContract<
   getStatus(scope?: SessionScope): HarnessStatus;
   /** Number of messages currently queued on a session. */
   getQueueSize(scope?: SessionScope): number;
+  /**
+   * Cumulative token usage and cost the session has accumulated across all of
+   * its turns, including turns that failed or were aborted after partial model
+   * work. Returns zeros for a session that has not run yet.
+   */
+  getUsage(scope?: SessionScope): SessionUsage;
 
   /**
    * Pre-populate a session's accumulated history with prior items so the next
@@ -272,9 +301,7 @@ export interface AgentHarnessContract<
     state?: unknown;
     threadId?: string;
     resourceId?: string;
-    context?: ContextLayer[];
-    /** @deprecated Renamed to `context`. */
-    memory?: ContextLayer[];
+    contextLayers?: ContextLayer[];
     /** Override the new context's initial cwd. */
     cwdInit?: string;
   }): Context;

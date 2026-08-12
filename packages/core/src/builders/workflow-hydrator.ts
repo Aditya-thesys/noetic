@@ -1,7 +1,7 @@
 /**
  * Converts a validated `WorkflowDocument` into a live `Step` tree.
  *
- * Each node kind maps to the corresponding builder (`step.llm`, `fork`,
+ * Each node kind maps to the corresponding builder (`callModel`, `inParallel`,
  * `loop`, etc.) so hydrated steps are indistinguishable from programmatic
  * ones — they register in the step registry, carry retry policies, etc.
  */
@@ -25,9 +25,8 @@ import type {
   Until,
 } from '@noetic-tools/types';
 import { frameworkCast, isServerToolSpec, NoeticConfigError } from '@noetic-tools/types';
-import { DetachedHandleImpl } from '../runtime/detached-handle';
 import type {
-  LlmWorkflowNode,
+  CallModelWorkflowNode,
   OutputCodecRef,
   SubflowWorkflowNode,
   UntilPredicate,
@@ -36,13 +35,14 @@ import type {
 } from '../schemas/workflow';
 import { all, any } from '../until/combinators';
 import { until } from '../until/predicates';
+import { DetachedHandleImpl } from '../util/detached-handle';
 
-import { branch, fork } from './control-flow-builders';
-import { every } from './every';
+import { conditional, inParallel } from './control-flow-builders';
+import { schedule } from './every';
 import { loop } from './loop-builder';
-import { provide } from './provide-builder';
+import { withContext } from './provide-builder';
 import { spawn } from './spawn-builder';
-import { step } from './step-builders';
+import { callModel, runCode, step } from './step-builders';
 
 //#region Types
 
@@ -54,14 +54,14 @@ export interface HydrationContext {
   /** SubHarness adapters keyed by harness id, resolving `claude-code`/`codex`/… nodes. */
   subHarnesses?: ReadonlyMap<SubHarnessKind, SubHarness>;
   /**
-   * Output codecs keyed by the `library` ref an `llm` node's `output` codec
+   * Output codecs keyed by the `library` ref a `callModel` node's `output` codec
    * reference names — the live codec built from a component library, e.g.
    * `new Map([['dashboard-lib', openUi(dashboardLibrary)]])` from
    * `@noetic-tools/openui`. Resolved the same way sub-harness adapters are.
    */
   uiLibraries?: ReadonlyMap<string, OutputCodec>;
   /**
-   * Resolves a named subprocess adapter ref declared on a `run` node's
+   * Resolves a named subprocess adapter ref declared on a `runCode` node's
    * `subprocess` field. When a node omits the ref, the step falls back to
    * `ctx.subprocess` at execution time.
    */
@@ -106,9 +106,11 @@ function hydrateUntilPredicate(pred: UntilPredicate): Until {
     case 'maxCost':
       return until.maxCost(pred.usd);
     case 'maxDuration':
-      return until.maxDuration(pred.ms);
+      return until.maxDuration(pred.duration);
     case 'noToolCalls':
       return until.noToolCalls();
+    case 'never':
+      return until.never();
     case 'outputContains':
       return until.outputContains(pred.marker);
     case 'outputEquals':
@@ -125,7 +127,7 @@ function hydrateUntilPredicate(pred: UntilPredicate): Until {
       throw new NoeticConfigError({
         code: 'UNKNOWN_UNTIL_PREDICATE',
         message: `Unknown until predicate kind: '${frameworkCast<UntilPredicate>(pred).kind}'.`,
-        hint: 'Supported kinds: maxSteps, maxCost, maxDuration, noToolCalls, outputContains, outputEquals, converged, any, all.',
+        hint: 'Supported kinds: maxSteps, maxCost, maxDuration, noToolCalls, never, outputContains, outputEquals, converged, any, all.',
       });
   }
 }
@@ -143,8 +145,8 @@ function hydrateUntilPredicate(pred: UntilPredicate): Until {
  * kinds combine into one `tools` array; the interpreter partitions them again
  * at execution.
  */
-function resolveLlmTools(
-  entries: LlmWorkflowNode['tools'],
+function resolveCallModelTools(
+  entries: CallModelWorkflowNode['tools'],
   registry: ReadonlyMap<string, Tool>,
 ): (Tool | ServerToolSpec)[] {
   const toolNames: string[] = [];
@@ -162,17 +164,17 @@ function resolveLlmTools(
   ];
 }
 
-function hydrateLlmNode(
+function hydrateCallModelNode(
   node: WorkflowNode,
   ctx: HydrationContext,
 ): Step<ContextData, string, string> {
-  if (node.kind !== 'llm') {
+  if (node.kind !== 'callModel') {
     return frameworkCast(undefined);
   }
 
-  const combined = resolveLlmTools(node.tools, ctx.tools);
+  const combined = resolveCallModelTools(node.tools, ctx.tools);
 
-  return step.llm({
+  return callModel({
     id: node.id,
     model: node.model ?? 'openai/gpt-4o',
     instructions: node.instructions,
@@ -183,7 +185,7 @@ function hydrateLlmNode(
 }
 
 /**
- * Resolve an `llm` node's `output` codec reference to a live `OutputCodec`.
+ * Resolve a `callModel` node's `output` codec reference to a live `OutputCodec`.
  *
  * Hydrated steps are typed `<string, string>` (the JSON boundary erases output
  * types), so the resolved codec is cast to the step's erased output type — the
@@ -218,11 +220,11 @@ function resolveOutputCodec(
   });
 }
 
-function hydrateToolNode(
+function hydrateInvokeToolNode(
   node: WorkflowNode,
   ctx: HydrationContext,
 ): Step<ContextData, string, string> {
-  if (node.kind !== 'tool') {
+  if (node.kind !== 'invokeTool') {
     return frameworkCast(undefined);
   }
 
@@ -240,7 +242,7 @@ function hydrateToolNode(
   }
 
   return frameworkCast(
-    step.run({
+    runCode({
       id: node.id,
       execute: async (_input: string, execCtx: Context) => {
         const args = node.args ?? {};
@@ -264,12 +266,6 @@ function hydrateToolNode(
           fs: execCtx.fs,
           shell: execCtx.shell,
           context: layerState,
-          // Deprecated alias — the same accessor object, as
-          // `buildToolExecutionContext` does. `Tool.execute` takes its second
-          // argument as `unknown`, so nothing here is structurally checked
-          // against `ToolExecutionContext`; the annotation above is what makes
-          // a missing field a compile error instead of a runtime `undefined`.
-          memory: layerState,
           assembledView: execCtx.itemLog.items,
           lastStepMeta: execCtx.lastStepMeta,
         };
@@ -280,17 +276,17 @@ function hydrateToolNode(
   );
 }
 
-function hydrateRunNode(
+function hydrateRunCodeNode(
   node: WorkflowNode,
   ctx: HydrationContext,
 ): Step<ContextData, string, string> {
-  if (node.kind !== 'run') {
+  if (node.kind !== 'runCode') {
     return frameworkCast(undefined);
   }
   const code = node.execute;
   const subprocessRef = node.subprocess;
   return frameworkCast(
-    step.run({
+    runCode({
       id: node.id,
       retry: node.retry,
       execute: async (input: string, execCtx: Context) => {
@@ -311,11 +307,11 @@ function hydrateRunNode(
   );
 }
 
-function hydrateBranchNode(
+function hydrateConditionalNode(
   node: WorkflowNode,
   ctx: HydrationContext,
 ): Step<ContextData, string, string> {
-  if (node.kind !== 'branch') {
+  if (node.kind !== 'conditional') {
     return frameworkCast(undefined);
   }
 
@@ -330,7 +326,7 @@ function hydrateBranchNode(
     allTargets.push(defaultTarget);
   }
 
-  return branch({
+  return conditional({
     id: node.id,
     route: (input: string) => {
       const trimmed = input.trim().toLowerCase();
@@ -345,16 +341,16 @@ function hydrateBranchNode(
   });
 }
 
-function hydrateForkNode(
+function hydrateInParallelNode(
   node: WorkflowNode,
   ctx: HydrationContext,
 ): Step<ContextData, string, string> {
-  if (node.kind !== 'fork') {
+  if (node.kind !== 'inParallel') {
     return frameworkCast(undefined);
   }
 
-  // Static fork: paths are known at hydration time and feed the optimizer.
-  // Dynamic fork (`each`): paths are produced per fork-input at runtime, one
+  // Static inParallel: paths are known at hydration time and feed the optimizer.
+  // Dynamic inParallel (`each`): paths are produced per inParallel-input at runtime, one
   // child per array item, so they cannot be pre-computed or optimized.
   const dynamic = node.each !== undefined;
   const eachTemplate = node.each;
@@ -378,7 +374,7 @@ function hydrateForkNode(
   const optimizable = dynamic ? undefined : frameworkCast<Step<ContextData>[]>(staticPaths);
 
   if (node.mode === 'race') {
-    return fork({
+    return inParallel({
       id: node.id,
       mode: 'race',
       paths: pathsFactory,
@@ -390,7 +386,7 @@ function hydrateForkNode(
   const mergeFn = buildMerge(node.merge ?? 'last');
 
   if (node.mode === 'settle') {
-    return fork({
+    return inParallel({
       id: node.id,
       mode: 'settle',
       paths: pathsFactory,
@@ -403,7 +399,7 @@ function hydrateForkNode(
     });
   }
 
-  return fork({
+  return inParallel({
     id: node.id,
     mode: 'all',
     paths: pathsFactory,
@@ -414,7 +410,7 @@ function hydrateForkNode(
 }
 
 /**
- * Resolves layer names declared on a `provide` / `spawn` node against the
+ * Resolves layer names declared on a `withContext` / `spawn` node against the
  * registry on `HydrationContext.layers`. Returns `[]` when no registry was
  * supplied — the host runs with its harness-default layers in that case.
  */
@@ -474,19 +470,19 @@ function hydrateSpawnNode(
   });
 }
 
-function hydrateProvideNode(
+function hydrateWithContextNode(
   node: WorkflowNode,
   ctx: HydrationContext,
 ): Step<ContextData, string, string> {
-  if (node.kind !== 'provide') {
+  if (node.kind !== 'withContext') {
     return frameworkCast(undefined);
   }
-  return provide({
+  return withContext({
     id: node.id,
     child: hydrateNode(node.child, ctx),
     context: resolveNamedLayers({
       names: node.layers,
-      nodeKind: 'provide',
+      nodeKind: 'withContext',
       nodeId: node.id,
       ctx,
     }),
@@ -521,7 +517,7 @@ function hydrateSequenceNode(
   const children = node.steps.map((s) => hydrateNode(s, ctx));
 
   return frameworkCast(
-    step.run({
+    runCode({
       id: node.id,
       execute: async (input: string, execCtx: Context) => {
         let current: unknown = input;
@@ -535,17 +531,17 @@ function hydrateSequenceNode(
   );
 }
 
-function hydrateEveryNode(
+function hydrateScheduleNode(
   node: WorkflowNode,
   ctx: HydrationContext,
 ): Step<ContextData, string, string> {
-  if (node.kind !== 'every') {
+  if (node.kind !== 'schedule') {
     return frameworkCast(undefined);
   }
-  return every({
+  return schedule({
     id: node.id,
     step: hydrateNode(node.step, ctx),
-    ms: node.ms,
+    interval: node.interval,
     onError: node.onError,
   });
 }
@@ -610,7 +606,7 @@ function hydrateSubflowNode(
     return cached;
   };
   return frameworkCast(
-    step.run({
+    runCode({
       id: node.id,
       execute: async (input: string, execCtx: Context) => {
         const child = resolve();
@@ -676,16 +672,16 @@ function resolveSubflowDocument(
 //#region Handler Registry
 
 const NODE_HYDRATORS: Record<string, NodeHydrator> = {
-  llm: hydrateLlmNode,
-  tool: hydrateToolNode,
-  run: hydrateRunNode,
-  branch: hydrateBranchNode,
-  fork: hydrateForkNode,
+  callModel: hydrateCallModelNode,
+  invokeTool: hydrateInvokeToolNode,
+  runCode: hydrateRunCodeNode,
+  conditional: hydrateConditionalNode,
+  inParallel: hydrateInParallelNode,
   spawn: hydrateSpawnNode,
-  provide: hydrateProvideNode,
+  withContext: hydrateWithContextNode,
   loop: hydrateLoopNode,
   sequence: hydrateSequenceNode,
-  every: hydrateEveryNode,
+  schedule: hydrateScheduleNode,
   subflow: hydrateSubflowNode,
   'claude-code': hydrateSubHarnessNode,
   codex: hydrateSubHarnessNode,
@@ -746,7 +742,7 @@ function stringifyResult(value: unknown): string {
 //#region Dynamic Fork Helpers
 
 /**
- * Parses the fork input (a JSON string) and locates the array to fan out over.
+ * Parses the inParallel input (a JSON string) and locates the array to fan out over.
  * When `over` is set, reads that property off the parsed object; otherwise the
  * parsed value itself must be an array.
  */
@@ -757,8 +753,8 @@ function selectArray(input: string, over: string | undefined, nodeId: string): u
   } catch {
     throw new NoeticConfigError({
       code: 'INVALID_FORK_INPUT',
-      message: `Dynamic fork '${nodeId}' could not parse its input as JSON.`,
-      hint: 'A dynamic fork (with `each`) expects its input to be a JSON array (or a JSON object when `over` is set).',
+      message: `Dynamic inParallel '${nodeId}' could not parse its input as JSON.`,
+      hint: 'A dynamic inParallel (with `each`) expects its input to be a JSON array (or a JSON object when `over` is set).',
     });
   }
   const candidate =
@@ -766,7 +762,7 @@ function selectArray(input: string, over: string | undefined, nodeId: string): u
   if (!Array.isArray(candidate)) {
     throw new NoeticConfigError({
       code: 'INVALID_FORK_INPUT',
-      message: `Dynamic fork '${nodeId}' did not resolve an array${
+      message: `Dynamic inParallel '${nodeId}' did not resolve an array${
         over ? ` at key '${over}'` : ''
       }.`,
       hint: over
@@ -778,8 +774,8 @@ function selectArray(input: string, over: string | undefined, nodeId: string): u
 }
 
 /**
- * Builds one fork path for a single dynamic-fork item. The item is injected as
- * the body's input (forks pass the same fork-input to every path), and the
+ * Builds one inParallel path for a single dynamic fan-out item. The item is injected as
+ * the body's input (inParallel steps pass the same input to every path), and the
  * template's node ids are suffixed with `-${i}` so each instantiation has
  * unique ids for tracing and step-registry uniqueness.
  */
@@ -793,7 +789,7 @@ function buildPerItemStep(opts: {
   const { forkId, eachTemplate, item, index, ctx } = opts;
   const hydratedEach = hydrateNode(suffixNodeIds(eachTemplate, `-${index}`), ctx);
   return frameworkCast(
-    step.run({
+    runCode({
       id: `${forkId}-item-${index}`,
       execute: async (_input: string, execCtx: Context) => {
         const itemInput = JSON.stringify(item);
@@ -846,7 +842,7 @@ function suffixNodeIds(node: WorkflowNode, suffix: string): WorkflowNode {
 //#region Run Node Helpers
 
 /**
- * Resolves the subprocess adapter for a `run` node. When the node names an
+ * Resolves the subprocess adapter for a `runCode` node. When the node names an
  * adapter ref, the host must supply a `resolveSubprocess` resolver; otherwise
  * the step falls back to the harness adapter on the execution context.
  */
@@ -872,7 +868,7 @@ function resolveSubprocessAdapter(opts: {
 }
 
 /**
- * Dispatches a `run` node's code string through a subprocess adapter: ships the
+ * Dispatches a `runCode` node's code string through a subprocess adapter: ships the
  * code plus the JSON-stringified input as a process request (input on stdin),
  * waits for the handle to settle, and returns the captured stdout as the step
  * output. A non-zero exit / failed handle surfaces as a thrown error.

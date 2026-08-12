@@ -213,7 +213,7 @@ interface StreamIdleWatchdog {
 /** @internal Create a watchdog that aborts `controller` when no
  *  {@link StreamIdleWatchdog.reset reset} is called within `timeoutMs`. When
  *  `timeoutMs <= 0`, returns an inert no-op so callers can always call `.reset()`
- *  / `.stop()` without a branch. Starts armed: the caller is responsible for
+ *  / `.stop()` without branching. Starts armed: the caller is responsible for
  *  `.stop()` in a `finally`. `onTimeout` runs before the abort so observers can
  *  emit a framework event with the original cause. Exported only for unit tests. */
 export function createStreamIdleWatchdog(
@@ -234,7 +234,7 @@ export function createStreamIdleWatchdog(
       if (stopped) {
         return;
       }
-      const reason = new Error(`llm stream idle timeout after ${timeoutMs}ms`);
+      const reason = new Error(`model stream idle timeout after ${timeoutMs}ms`);
       onTimeout?.();
       controller.abort(reason);
     }, timeoutMs);
@@ -488,7 +488,7 @@ export class AgentHarnessModelCaller {
     throw new NoeticConfigError({
       code: 'NO_LLM_PROVIDER',
       message: 'No LLM provider configured on this harness.',
-      hint: 'Pass `llm: { apiKey: "..." }` (defaults to the Noetic platform) or set NOETIC_API_KEY. For direct OpenRouter, use `llm: { provider: "openrouter", apiKey: "..." }` or set OPENROUTER_API_KEY.',
+      hint: 'Pass `callModelDefaults: { apiKey: "..." }` (defaults to the Noetic platform) or set NOETIC_API_KEY. For direct OpenRouter, use `callModelDefaults: { provider: "openrouter", apiKey: "..." }` or set OPENROUTER_API_KEY.',
     });
   }
 
@@ -557,7 +557,7 @@ export class AgentHarnessModelCaller {
         roundController,
         () => {
           idleStalled = true;
-          prepared.emitIfAllowed('llm_call_stalled', {
+          prepared.emitIfAllowed('model_call_stalled', {
             round,
             idleTimeoutMs: this.opts.streamIdleTimeoutMs,
           });
@@ -567,7 +567,7 @@ export class AgentHarnessModelCaller {
         ? withEphemeralContinueInput(conversationInput)
         : frameworkCast<OpenRouterAgent.Item[]>(conversationInput);
 
-      prepared.emitIfAllowed('llm_call_started', {
+      prepared.emitIfAllowed('model_call_started', {
         round,
         messageCount: modelInput.length,
         toolCount: prepared.sdkTools?.length ?? 0,
@@ -605,7 +605,7 @@ export class AgentHarnessModelCaller {
           watchdog.reset();
           if (!firstEventSeen) {
             firstEventSeen = true;
-            prepared.emitIfAllowed('llm_call_first_event', {
+            prepared.emitIfAllowed('model_call_first_event', {
               round,
             });
           }
@@ -621,7 +621,7 @@ export class AgentHarnessModelCaller {
         if (idleStalled) {
           throw roundSignal.reason instanceof Error
             ? roundSignal.reason
-            : new Error(`llm stream idle timeout after ${this.opts.streamIdleTimeoutMs}ms`);
+            : new Error(`model stream idle timeout after ${this.opts.streamIdleTimeoutMs}ms`);
         }
         if (request.signal?.aborted) {
           break;
@@ -666,7 +666,7 @@ export class AgentHarnessModelCaller {
         continue;
       }
       invalidRecoveryContinuations = 0;
-      prepared.emitIfAllowed('llm_call_completed', {
+      prepared.emitIfAllowed('model_call_completed', {
         round,
         itemCount: sdkResponse.output?.length ?? 0,
       });
@@ -786,7 +786,7 @@ export class AgentHarnessModelCaller {
         kind: 'ok',
       };
     }
-    params.emitIfAllowed('llm_call_failed', {
+    params.emitIfAllowed('model_call_failed', {
       round: params.round,
       status: terminalError.status,
       error: terminalError.message,
@@ -796,7 +796,7 @@ export class AgentHarnessModelCaller {
       throw new Error(terminalError.message);
     }
     const next = params.invalidRecoveryContinuations + 1;
-    params.emitIfAllowed('llm_call_recovery_continue', {
+    params.emitIfAllowed('model_call_recovery_continue', {
       round: params.round,
       status: terminalError.status,
       attempt: next,
@@ -828,7 +828,7 @@ export class AgentHarnessModelCaller {
       };
     }
     const message = 'LLM response completed with no output items';
-    params.emitIfAllowed('llm_call_failed', {
+    params.emitIfAllowed('model_call_failed', {
       round: params.round,
       status: 'completed',
       error: message,
@@ -838,7 +838,7 @@ export class AgentHarnessModelCaller {
       throw new Error(message);
     }
     const next = params.invalidRecoveryContinuations + 1;
-    params.emitIfAllowed('llm_call_recovery_continue', {
+    params.emitIfAllowed('model_call_recovery_continue', {
       round: params.round,
       status: 'completed',
       attempt: next,

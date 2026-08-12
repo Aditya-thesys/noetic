@@ -10,12 +10,12 @@ export type NoeticError =
       retriesExhausted: boolean;
     }
   | {
-      kind: 'llm_refused';
+      kind: 'model_refused';
       stepId: string;
       refusal: string;
     }
   | {
-      kind: 'llm_parse_error';
+      kind: 'model_parse_error';
       stepId: string;
       raw: string;
       schema: StandardSchemaV1;
@@ -23,7 +23,7 @@ export type NoeticError =
       zodError: ZodError;
     }
   | {
-      kind: 'llm_rate_limit';
+      kind: 'model_rate_limit';
       stepId: string;
       retryAfter?: number;
     }
@@ -89,5 +89,6 @@ export type NoeticError =
       kind: 'handle_evicted';
       handleId: string;
       stepId: string;
-      gracePeriodMs: number;
+      /** Grace period in milliseconds. */
+      gracePeriod: number;
     };

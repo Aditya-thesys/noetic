@@ -60,7 +60,7 @@ Constraint: a harness `config.name` must not itself end in a `:`-prefixed event 
 
 ## Tools and approvals
 
-`chatTools({ chat, preset?, scope?, requireApproval?, approvalTimeoutMs? })` wraps Chat SDK's `createChatTools()` (post, DM, react, edit, delete, subscriptions) into Noetic `Tool`s via the general-purpose `fromAiSdkTool(name, aiTool, options?)`, which preserves the AI SDK tool's zod `inputSchema` and delegates `execute`. **Approval defaults follow the vendor:** Chat SDK ships its write tools gated (`needsApproval: true`), and the wrapper inherits that — `requireApproval` only overrides per tool or wholesale. A dynamic vendor predicate counts as gated.
+`chatTools({ chat, preset?, scope?, requireApproval?, approvalTimeout? })` wraps Chat SDK's `createChatTools()` (post, DM, react, edit, delete, subscriptions) into Noetic `Tool`s via the general-purpose `fromAiSdkTool(name, aiTool, options?)`, which preserves the AI SDK tool's zod `inputSchema` and delegates `execute`. **Approval defaults follow the vendor:** Chat SDK ships its write tools gated (`needsApproval: true`), and the wrapper inherits that — `requireApproval` only overrides per tool or wholesale. A dynamic vendor predicate counts as gated.
 
 Approval gating runs on external channels (`06-channels`), not the AI SDK loop:
 
@@ -79,6 +79,6 @@ Without a store, first-contact tracking is per-process.
 ## Future Considerations
 
 - Rendering OpenUI fragments (`28-generative-ui`) to Chat SDK cards/Block Kit.
-- Interview-pattern (`13-patterns`) integration with platform modals.
-- `plan_update` chunks from the plan memory layer.
+- Platform modals as a structured-input surface for a clarifying-question composition (`13-patterns`) — the agent asks for missing fields through a modal instead of free-text turns.
+- `plan_update` chunks from the plan layer.
 - Cancelling in-flight vendor tool calls on turn abort, once the harness exposes an abort signal to tool executors.

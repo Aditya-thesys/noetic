@@ -13,7 +13,6 @@ import type {
   ToolUiDeclaration,
 } from '@noetic-tools/types';
 import { NoeticConfigError } from '@noetic-tools/types';
-import { resolveContextOption } from './context-option';
 
 //#region Types
 
@@ -36,10 +35,8 @@ type ToolConfig<I extends StandardSchemaV1, O extends StandardSchemaV1> = {
     toolCtx: ToolExecutionContext,
   ) => Promise<InferSchemaOutput<O>>;
   needsApproval?: boolean;
-  /** Optional context declaration — the runtime generates a ContextLayer from this via toolContextLayer(). */
+  /** Optional context declaration — the runtime generates a ContextLayer from this via toolCalls(). */
   context?: ToolContextDeclaration;
-  /** @deprecated Renamed to `context`. */
-  memory?: ToolContextDeclaration;
   /** Optional UI declaration — the runtime emits the rendered fragments at call/progress/result points. */
   ui?: ToolUiDeclaration<I, O>;
 } & InputSchemaConfig<I>;
@@ -68,10 +65,8 @@ type GeneratorToolConfig<
     toolCtx: ToolExecutionContext,
   ) => AsyncGenerator<InferSchemaOutput<E>, InferSchemaOutput<O>>;
   needsApproval?: boolean;
-  /** Optional context declaration — the runtime generates a ContextLayer from this via toolContextLayer(). */
+  /** Optional context declaration — the runtime generates a ContextLayer from this via toolCalls(). */
   context?: ToolContextDeclaration;
-  /** @deprecated Renamed to `context`. */
-  memory?: ToolContextDeclaration;
   /** Optional UI declaration — the runtime emits the rendered fragments at call/progress/result points. */
   ui?: ToolUiDeclaration<I, O, InferSchemaOutput<E>>;
 } & InputSchemaConfig<I>;
@@ -123,7 +118,7 @@ export function tool<I extends StandardSchemaV1, O extends StandardSchemaV1>(
     decorateResultItem: config.decorateResultItem,
     execute: config.execute,
     needsApproval: config.needsApproval,
-    context: resolveContextOption(config),
+    context: config.context,
     ui: config.ui,
   };
 }
@@ -151,7 +146,7 @@ export function toolWithGenerator<
     decorateResultItem: config.decorateResultItem,
     execute: config.execute,
     needsApproval: config.needsApproval,
-    context: resolveContextOption(config),
+    context: config.context,
     ui: config.ui,
   };
 }

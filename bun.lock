@@ -15,6 +15,7 @@
         "@noetic-tools/sub-harness": "workspace:*",
         "@noetic-tools/sub-harness-claude-code": "workspace:*",
         "@noetic-tools/sub-harness-codex": "workspace:*",
+        "bun-types": "latest",
         "zod": "^4.0.0",
       },
     },
@@ -124,19 +125,6 @@
         "postcss": "8.5.4",
         "tailwindcss": "4.1.8",
         "typescript": "5.8.3",
-      },
-    },
-    "packages/memory": {
-      "name": "@noetic-tools/memory",
-      "version": "3.1.0",
-      "dependencies": {
-        "@noetic-tools/context": "workspace:*",
-      },
-      "devDependencies": {
-        "bun-types": "latest",
-      },
-      "peerDependencies": {
-        "zod": "^4.0.0",
       },
     },
     "packages/openui": {
@@ -264,7 +252,7 @@
     },
     "packages/types": {
       "name": "@noetic-tools/types",
-      "version": "3.1.0",
+      "version": "3.2.0",
       "dependencies": {
         "@openrouter/agent": "^0.6.0",
         "@standard-schema/spec": "1.1.0",
@@ -299,12 +287,14 @@
         "@types/node": "25.5.0",
         "@types/react": "19.1.6",
         "@types/react-dom": "19.1.6",
+        "@valibot/to-json-schema": "1.7.1",
         "bun-types": "latest",
         "kiira": "0.3.0",
         "kiira-core": "0.3.0",
         "postcss": "8.5.4",
         "tailwindcss": "4.1.8",
         "typescript": "5.8.3",
+        "valibot": "1.4.2",
         "zod": "4.3.6",
       },
     },
@@ -499,8 +489,6 @@
     "@noetic-tools/core": ["@noetic-tools/core@workspace:packages/core"],
 
     "@noetic-tools/eval": ["@noetic-tools/eval@workspace:packages/eval"],
-
-    "@noetic-tools/memory": ["@noetic-tools/memory@workspace:packages/memory"],
 
     "@noetic-tools/openui": ["@noetic-tools/openui@workspace:packages/openui"],
 

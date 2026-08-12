@@ -2,7 +2,6 @@
  * @noetic-tools/types — foundational type contracts and primitives shared
  * across the Noetic framework.
  */
-export * from './deprecated';
 export * from './errors/noetic-config-error';
 export * from './errors/noetic-error';
 export * from './schemas/item';
@@ -11,6 +10,7 @@ export * from './types/channel';
 export * from './types/common';
 export * from './types/context';
 export * from './types/context-cache';
+export * from './types/context-harness';
 export * from './types/context-layer';
 export * from './types/context-parts/item-log';
 export * from './types/context-parts/layer-usage';
