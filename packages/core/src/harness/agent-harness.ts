@@ -1,6 +1,7 @@
 import { frameworkCast, ItemSchemaRegistry, NoeticConfigError } from '@noetic-tools/types';
 import { SpanImpl } from '../observability/span-impl';
 import { NoopExporter } from '../observability/trace-exporter';
+import { AcpSessionStore } from '../runtime/acp-session-store';
 import {
   createInMemoryFsAdapter,
   createInMemoryShellAdapter,
@@ -64,6 +65,8 @@ import {
   snapshotCwdState,
 } from './deps/runtime';
 import type {
+  AcpLiveSession,
+  AcpSessionInfo,
   AgentConfig,
   AgentHarnessContract,
   AgentHooks,
@@ -100,7 +103,6 @@ import type {
   StorageAdapter,
   StreamEvent,
   StreamingItem,
-  SubHarnessSession,
   SubprocessAdapter,
   Tool,
   TraceExporter,
@@ -437,12 +439,58 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
   private readonly defaultDeliveryMode: DeliveryMode;
   private readonly sessions = new Map<string, Session>();
   /**
-   * @internal Cross-step harness sessions keyed by `step.session.reuse`, kept
-   * alive for the life of this harness so reused coding-agent sessions span
-   * multiple steps. Reached by the interpreter's harness handler via
-   * `frameworkCast`; do not access from outside core.
+   * @internal Live ACP connections. Reached by the interpreter via
+   * `frameworkCast`; use {@link listAcpSessions}, {@link getAcpSession},
+   * {@link cancelAcpSession}, and {@link closeAcpSessions} from outside core.
    */
-  readonly subHarnessSessions = new Map<string, SubHarnessSession>();
+  readonly acpSessions = new AcpSessionStore();
+
+  /**
+   * Snapshot of every live ACP sub-agent, for a UI that wants to show what is
+   * running and let a user act on it. Read-only: a session's turns are driven
+   * by steps, so nothing here can start work behind the runtime's back.
+   * @public
+   */
+  listAcpSessions(): AcpSessionInfo[] {
+    return this.acpSessions.list();
+  }
+
+  /**
+   * The live connection + session behind a handle from {@link listAcpSessions}
+   * (or a step's `session.reuse` key), or `undefined` when nothing matches.
+   * @public
+   */
+  getAcpSession(key: string): AcpLiveSession | undefined {
+    return this.acpSessions.get(key);
+  }
+
+  /**
+   * Interrupt whatever the sub-agent under `key` is doing, via `session/cancel`.
+   * The connection stays open and the turn still returns — with the `cancelled`
+   * stop reason, which the running step surfaces as a `cancelled` error.
+   * Returns false when nothing matches the key.
+   * @public
+   */
+  async cancelAcpSession(key: string): Promise<boolean> {
+    const entry = this.acpSessions.get(key);
+    if (!entry) {
+      return false;
+    }
+    await entry.session.cancel();
+    return true;
+  }
+
+  /**
+   * Close every ACP connection this harness still holds, whatever its
+   * keep-alive scope. A connection owns a live agent — usually a child process
+   * whose stdio keeps the event loop alive — so a `keepAlive: 'harness'`
+   * session must be closed by its owner or the host will not exit. Idempotent.
+   * @public
+   */
+  async closeAcpSessions(): Promise<void> {
+    await this.acpSessions.closeAll();
+  }
+
   readonly layerStateStore: LayerStateStore;
   /** Per-harness memoization cache for `recallMode: 'eventual'` layers. */
   readonly recallCache: RecallCache;
@@ -805,6 +853,7 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
       } else {
         this.rootRunDepth.delete(ctx.id);
         this.channelStore.closeExecution(ctx.id);
+        await this.acpSessions.closeOwnedBy(ctx.id);
       }
     }
   }
@@ -1201,7 +1250,7 @@ export class AgentHarness<TParams extends Record<string, unknown> = Record<strin
    *
    * Aborting a context rejects everything blocked on it (channel `recv`
    * waiters, parked senders) with `{ kind: 'cancelled' }`, stops its in-flight
-   * model call and sub-harness turn, and makes the next step boundary throw
+   * model call and ACP agent turn, and makes the next step boundary throw
    * `cancelled`.
    *
    * Cancellation is cooperative: a layer hook already in flight is allowed to
