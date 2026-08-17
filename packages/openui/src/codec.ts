@@ -1,14 +1,15 @@
 /**
- * The `openUi()` output codec: plugs a component library into `step.llm` as a
- * streaming output dialect. Deltas feed the incremental parser (emitting
+ * The `openUi()` output codec: plugs a component library into `step.callModel`
+ * as a streaming output dialect. Deltas feed the incremental scanner (emitting
  * `openui.*` framework events per completed statement); `finish()` reparses
  * the full text fresh so the returned document is deterministic whether or
- * not the turn actually streamed.
+ * not the turn actually streamed. The library prompt comes from
+ * `@openuidev/lang-core`.
  */
 
 import type { OutputCodec, OutputCodecEventEmitter, OutputCodecSession } from '@noetic-tools/types';
-import type { UiAssignment, UiDocument } from './lang/document';
-import { serializeAssignment, UiStatementKind } from './lang/document';
+import type { UiDocument, UiStatement } from './lang/document';
+import { UiStatementKind } from './lang/document';
 import { OpenUiLangParser, parseDocument } from './lang/parser';
 import type { UiLibrary } from './library';
 
@@ -32,17 +33,17 @@ function eventTypeFor(kind: UiStatementKind): OpenUiEventType {
   return OPENUI_EVENT.Node;
 }
 
-function emitAssignment(assignment: UiAssignment, emit: OutputCodecEventEmitter): void {
-  emit(eventTypeFor(assignment.kind), {
-    ref: assignment.ref,
-    kind: assignment.kind,
-    line: assignment.line,
-    source: serializeAssignment(assignment),
+function emitStatement(statement: UiStatement, emit: OutputCodecEventEmitter): void {
+  emit(eventTypeFor(statement.kind), {
+    ref: statement.ref,
+    kind: statement.kind,
+    line: statement.line,
+    source: statement.source,
   });
 }
 
 /**
- * Build the streaming output codec for a library. Use as `step.llm`'s
+ * Build the streaming output codec for a library. Use as `step.callModel`'s
  * `output`: the library prompt rides `instructions`, statements stream as
  * `openui.node` / `openui.state` / `openui.query` framework events, and the
  * step returns the materialized `UiDocument`.
@@ -56,8 +57,8 @@ export function openUi(library: UiLibrary): OutputCodec<UiDocument> {
       const parser = new OpenUiLangParser(library.dialect);
       return {
         push(delta, emit) {
-          for (const assignment of parser.push(delta)) {
-            emitAssignment(assignment, emit);
+          for (const statement of parser.push(delta)) {
+            emitStatement(statement, emit);
           }
         },
         finish(fullText) {

@@ -10,11 +10,26 @@
       },
       "devDependencies": {
         "@biomejs/biome": "^2.3.11",
+        "@noetic-tools/acp": "workspace:*",
         "@noetic-tools/core": "workspace:*",
         "@noetic-tools/openui": "workspace:*",
-        "@noetic-tools/sub-harness": "workspace:*",
-        "@noetic-tools/sub-harness-claude-code": "workspace:*",
-        "@noetic-tools/sub-harness-codex": "workspace:*",
+        "bun-types": "latest",
+        "yaml": "^2.9.0",
+        "zod": "^4.0.0",
+      },
+    },
+    "packages/acp": {
+      "name": "@noetic-tools/acp",
+      "version": "1.0.0",
+      "dependencies": {
+        "@noetic-tools/types": "workspace:*",
+        "@zed-industries/agent-client-protocol": "^0.4.5",
+        "zod": "^4.0.0",
+      },
+      "devDependencies": {
+        "bun-types": "latest",
+      },
+      "peerDependencies": {
         "zod": "^4.0.0",
       },
     },
@@ -41,7 +56,7 @@
     },
     "packages/context": {
       "name": "@noetic-tools/context",
-      "version": "1.0.0",
+      "version": "1.2.2",
       "dependencies": {
         "@noetic-tools/types": "workspace:*",
         "zod": "^4.0.0",
@@ -55,7 +70,7 @@
     },
     "packages/core": {
       "name": "@noetic-tools/core",
-      "version": "5.1.0",
+      "version": "5.4.1",
       "dependencies": {
         "@noetic-tools/context": "workspace:*",
         "@noetic-tools/types": "workspace:*",
@@ -64,7 +79,9 @@
       },
       "devDependencies": {
         "@openrouter/agent": "^0.6.0",
+        "@valibot/to-json-schema": "1.7.1",
         "bun-types": "latest",
+        "valibot": "1.4.2",
       },
       "peerDependencies": {
         "@openrouter/agent": "^0.6.0",
@@ -76,7 +93,7 @@
     },
     "packages/eval": {
       "name": "@noetic-tools/eval",
-      "version": "1.0.0",
+      "version": "1.0.2",
       "bin": {
         "noetic-eval": "./dist/cli/cli.js",
       },
@@ -124,25 +141,13 @@
         "typescript": "5.8.3",
       },
     },
-    "packages/memory": {
-      "name": "@noetic-tools/memory",
-      "version": "3.1.0",
-      "dependencies": {
-        "@noetic-tools/context": "workspace:*",
-      },
-      "devDependencies": {
-        "bun-types": "latest",
-      },
-      "peerDependencies": {
-        "zod": "^4.0.0",
-      },
-    },
     "packages/openui": {
       "name": "@noetic-tools/openui",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "dependencies": {
         "@noetic-tools/context": "workspace:*",
         "@noetic-tools/types": "workspace:*",
+        "@openuidev/lang-core": "0.2.11",
         "zod": "^4.0.0",
       },
       "devDependencies": {
@@ -174,97 +179,13 @@
         "bun-types": "latest",
       },
     },
-    "packages/sub-harness": {
-      "name": "@noetic-tools/sub-harness",
-      "version": "1.0.0",
-      "dependencies": {
-        "@noetic-tools/types": "workspace:*",
-        "zod": "^4.0.0",
-      },
-      "devDependencies": {
-        "bun-types": "latest",
-      },
-      "peerDependencies": {
-        "zod": "^4.0.0",
-      },
-    },
-    "packages/sub-harness-claude-code": {
-      "name": "@noetic-tools/sub-harness-claude-code",
-      "version": "1.0.0",
-      "dependencies": {
-        "@noetic-tools/sub-harness": "workspace:*",
-        "@noetic-tools/types": "workspace:*",
-      },
-      "devDependencies": {
-        "bun-types": "latest",
-      },
-      "peerDependencies": {
-        "@anthropic-ai/claude-agent-sdk": ">=0.1.0",
-        "zod": "^4.0.0",
-      },
-      "optionalPeers": [
-        "@anthropic-ai/claude-agent-sdk",
-      ],
-    },
-    "packages/sub-harness-codex": {
-      "name": "@noetic-tools/sub-harness-codex",
-      "version": "1.0.0",
-      "dependencies": {
-        "@noetic-tools/sub-harness": "workspace:*",
-        "@noetic-tools/types": "workspace:*",
-      },
-      "devDependencies": {
-        "bun-types": "latest",
-      },
-      "peerDependencies": {
-        "@openai/codex-sdk": ">=0.1.0",
-        "zod": "^4.0.0",
-      },
-      "optionalPeers": [
-        "@openai/codex-sdk",
-      ],
-    },
-    "packages/sub-harness-opencode": {
-      "name": "@noetic-tools/sub-harness-opencode",
-      "version": "1.0.0",
-      "dependencies": {
-        "@noetic-tools/sub-harness": "workspace:*",
-        "@noetic-tools/types": "workspace:*",
-      },
-      "devDependencies": {
-        "bun-types": "latest",
-      },
-      "peerDependencies": {
-        "@opencode-ai/sdk": ">=0.1.0",
-        "zod": "^4.0.0",
-      },
-      "optionalPeers": [
-        "@opencode-ai/sdk",
-      ],
-    },
-    "packages/sub-harness-pi": {
-      "name": "@noetic-tools/sub-harness-pi",
-      "version": "1.0.0",
-      "dependencies": {
-        "@noetic-tools/sub-harness": "workspace:*",
-        "@noetic-tools/types": "workspace:*",
-      },
-      "devDependencies": {
-        "bun-types": "latest",
-      },
-      "peerDependencies": {
-        "@pi-agent/sdk": ">=0.1.0",
-        "zod": "^4.0.0",
-      },
-      "optionalPeers": [
-        "@pi-agent/sdk",
-      ],
-    },
     "packages/types": {
       "name": "@noetic-tools/types",
-      "version": "3.0.0",
+      "version": "3.2.2",
       "dependencies": {
         "@openrouter/agent": "^0.6.0",
+        "@standard-schema/spec": "1.1.0",
+        "@zed-industries/agent-client-protocol": "^0.4.5",
         "zod": "^4.0.0",
       },
       "devDependencies": {
@@ -296,12 +217,14 @@
         "@types/node": "25.5.0",
         "@types/react": "19.1.6",
         "@types/react-dom": "19.1.6",
+        "@valibot/to-json-schema": "1.7.1",
         "bun-types": "latest",
         "kiira": "0.3.0",
         "kiira-core": "0.3.0",
         "postcss": "8.5.4",
         "tailwindcss": "4.1.8",
         "typescript": "5.8.3",
+        "valibot": "1.4.2",
         "zod": "4.3.6",
       },
     },
@@ -489,6 +412,8 @@
 
     "@next/swc-win32-x64-msvc": ["@next/swc-win32-x64-msvc@16.1.6", "", { "os": "win32", "cpu": "x64" }, "sha512-NRfO39AIrzBnixKbjuo2YiYhB6o9d8v/ymU9m/Xk8cyVk+k7XylniXkHwjs4s70wedVffc6bQNbufk5v0xEm0A=="],
 
+    "@noetic-tools/acp": ["@noetic-tools/acp@workspace:packages/acp"],
+
     "@noetic-tools/chat-sdk": ["@noetic-tools/chat-sdk@workspace:packages/chat-sdk"],
 
     "@noetic-tools/context": ["@noetic-tools/context@workspace:packages/context"],
@@ -497,21 +422,9 @@
 
     "@noetic-tools/eval": ["@noetic-tools/eval@workspace:packages/eval"],
 
-    "@noetic-tools/memory": ["@noetic-tools/memory@workspace:packages/memory"],
-
     "@noetic-tools/openui": ["@noetic-tools/openui@workspace:packages/openui"],
 
     "@noetic-tools/platform-node": ["@noetic-tools/platform-node@workspace:packages/platform-node"],
-
-    "@noetic-tools/sub-harness": ["@noetic-tools/sub-harness@workspace:packages/sub-harness"],
-
-    "@noetic-tools/sub-harness-claude-code": ["@noetic-tools/sub-harness-claude-code@workspace:packages/sub-harness-claude-code"],
-
-    "@noetic-tools/sub-harness-codex": ["@noetic-tools/sub-harness-codex@workspace:packages/sub-harness-codex"],
-
-    "@noetic-tools/sub-harness-opencode": ["@noetic-tools/sub-harness-opencode@workspace:packages/sub-harness-opencode"],
-
-    "@noetic-tools/sub-harness-pi": ["@noetic-tools/sub-harness-pi@workspace:packages/sub-harness-pi"],
 
     "@noetic-tools/types": ["@noetic-tools/types@workspace:packages/types"],
 
@@ -526,6 +439,8 @@
     "@openrouter/sdk": ["@openrouter/sdk@0.12.35", "", { "dependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-s4QVLLnG1AmfW3TjnnHUqGfsCkzwVK+kboGcZmKbde09m1DPqgzl4RUFt/HJ5v97MX8aEaN0UG3mKv2S+qj2Gw=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.1", "", {}, "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="],
+
+    "@openuidev/lang-core": ["@openuidev/lang-core@0.2.11", "", { "peerDependencies": { "@modelcontextprotocol/sdk": ">=1.0.0", "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-30tTX7bnTLMQMs1kPhIv/tVY8hlW5xtimf6fBBS16ctidceuMZNWEe0VTpuz3lEmdyThp2lc7vy+lSfTqIIwlg=="],
 
     "@orama/orama": ["@orama/orama@3.1.18", "", {}, "sha512-a61ljmRVVyG5MC/698C8/FfFDw5a8LOIvyOLW5fztgUXqUpc1jOfQzOitSCbge657OgXXThmY3Tk8fpiDb4UcA=="],
 
@@ -689,6 +604,8 @@
 
     "@ungap/structured-clone": ["@ungap/structured-clone@1.3.0", "", {}, "sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g=="],
 
+    "@valibot/to-json-schema": ["@valibot/to-json-schema@1.7.1", "", { "peerDependencies": { "valibot": "^1.4.0" } }, "sha512-3qkmU6KXWh8GIThEAW3kuRHPQBMjWkKy+Ppz3WkUucx53DTpOa6siMn4xDGSOhlVyMrDaJTCTMLYPZVAIk1P0A=="],
+
     "@vercel/oidc": ["@vercel/oidc@3.2.0", "", {}, "sha512-UycprH3T6n3jH0k44NHMa7pnFHGu/N05MjojYr+Mc6I7obkoLIJujSWwin1pCvdy/eOxrI/l3uDLQsmcrOb4ug=="],
 
     "@willbooster/monaco-loader": ["@willbooster/monaco-loader@2.0.0", "", { "dependencies": { "monaco-editor": "0.56.0" } }, "sha512-rinG7i8uenXPlnstKNO3wFlDJcSuQs9u/MSDi8PgCqoi5NPYXOsG/gK1tVzbqPnpsrPQFEytftqlUTIJR+1x4Q=="],
@@ -700,6 +617,8 @@
     "@xyflow/react": ["@xyflow/react@12.11.2", "", { "dependencies": { "@xyflow/system": "0.0.79", "classcat": "^5.0.3", "zustand": "^4.4.0" }, "peerDependencies": { "@types/react": ">=17", "@types/react-dom": ">=17", "react": ">=17", "react-dom": ">=17" }, "optionalPeers": ["@types/react", "@types/react-dom"] }, "sha512-eLAlDWJfWnQEhJwGMjlWdAXO9eYllKpliUmPQlAmOLxz6mExXuzMVDUKLMquixgkrtmMFFtug3jGKmYYld12cA=="],
 
     "@xyflow/system": ["@xyflow/system@0.0.79", "", { "dependencies": { "@types/d3-drag": "^3.0.7", "@types/d3-interpolate": "^3.0.4", "@types/d3-selection": "^3.0.10", "@types/d3-transition": "^3.0.8", "@types/d3-zoom": "^3.0.8", "d3-drag": "^3.0.0", "d3-interpolate": "^3.0.1", "d3-selection": "^3.0.0", "d3-zoom": "^3.0.0" } }, "sha512-czLyOh91NF0hIzbNzwi8I6GlqG23BHh2435OddfI6uiaLH3xdrdygO93gqgH1Bv9mhy8XPFQJOBn1FTq4LvEWA=="],
+
+    "@zed-industries/agent-client-protocol": ["@zed-industries/agent-client-protocol@0.4.5", "", { "dependencies": { "zod": "^3.0.0" } }, "sha512-OwHKfu5AiKul/GSJilHg36+kOSV9eOl2eYnjR6tenAQDdraSnt22WFk0SDFTeuAANz1Gxkv+DTf7Hq32rvX7FQ=="],
 
     "acorn": ["acorn@8.14.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-cl669nCJTZBsL97OF4kUQm5g5hC2uihk0NxY3WENAC0TYdILVkAyHymAntgxGkl7K+t0cXIrH5siy5S4XkFycA=="],
 
@@ -1181,6 +1100,8 @@
 
     "util-deprecate": ["util-deprecate@1.0.2", "", {}, "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw=="],
 
+    "valibot": ["valibot@1.4.2", "", { "peerDependencies": { "typescript": ">=5" }, "optionalPeers": ["typescript"] }, "sha512-gjdCvJ6d3RyHAneqxMYMW9QMCwYMb3jpOO0IyHZV1bnRHFBHrX3VkIILt5XYR0WhwHiH7Mty8ovuPZ/O3gamrg=="],
+
     "vfile": ["vfile@6.0.3", "", { "dependencies": { "@types/unist": "^3.0.0", "vfile-message": "^4.0.0" } }, "sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q=="],
 
     "vfile-location": ["vfile-location@5.0.3", "", { "dependencies": { "@types/unist": "^3.0.0", "vfile": "^6.0.0" } }, "sha512-5yXvWDEgqeiYiBe1lbxYF7UMAIm/IcopxMHrMQDq3nvKcjPKIhZklUKL+AE7J7uApI4kwe2snsK+eI6UTj9EHg=="],
@@ -1190,6 +1111,8 @@
     "web-namespaces": ["web-namespaces@2.0.1", "", {}, "sha512-bKr1DkiNa2krS7qxNtdrtHAmzuYGFQLiQ13TsorsdT6ULTkPLKuu5+GsFpDlg6JFjUTwX2DyhMPG2be8uPrqsQ=="],
 
     "yallist": ["yallist@5.0.0", "", {}, "sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw=="],
+
+    "yaml": ["yaml@2.9.0", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA=="],
 
     "zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
 
@@ -1224,6 +1147,8 @@
     "@tailwindcss/oxide-wasm32-wasi/tslib": ["tslib@2.8.1", "", { "bundled": true }, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
     "@xyflow/react/zustand": ["zustand@4.5.7", "", { "dependencies": { "use-sync-external-store": "^1.2.2" }, "peerDependencies": { "@types/react": ">=16.8", "immer": ">=9.0.6", "react": ">=16.8" }, "optionalPeers": ["@types/react", "immer", "react"] }, "sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw=="],
+
+    "@zed-industries/agent-client-protocol/zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
 
     "fumadocs-core/react": ["react@19.2.5", "", {}, "sha512-llUJLzz1zTUBrskt2pwZgLq59AemifIftw4aB7JxOqf1HY2FDaGDxgwpAPVzHU1kdWabH7FauP4i1oEeer2WCA=="],
 
