@@ -20,6 +20,13 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { z } from 'zod';
 
+/** Narrow an action-typed prop (declared `z.any()`) to an evaluated ActionPlan. */
+function isActionPlan(value: unknown): value is ActionPlan {
+  return (
+    typeof value === 'object' && value !== null && 'steps' in value && Array.isArray(value.steps)
+  );
+}
+
 //#region Azulejo-style tile (deterministic art per listing)
 
 function hashHue(seed: string): number {
@@ -170,7 +177,7 @@ const SortChip = defineComponent({
     const triggerAction = useTriggerAction();
     const label = props.label ?? 'Sort';
     const active = props.active === true;
-    const action = props.onPress as ActionPlan | undefined;
+    const action = isActionPlan(props.onPress) ? props.onPress : undefined;
     return (
       <button
         type="button"
@@ -212,7 +219,7 @@ const ListingCard = defineComponent({
     const triggerAction = useTriggerAction();
     const title = props.title ?? 'Stay';
     const highlight = props.highlight ?? '';
-    const action = props.onSelect as ActionPlan | undefined;
+    const action = isActionPlan(props.onSelect) ? props.onSelect : undefined;
     const select = action ? () => void triggerAction(title, undefined, action) : undefined;
     return (
       <article
@@ -357,7 +364,7 @@ const Button = defineComponent({
   component: ({ props }) => {
     const triggerAction = useTriggerAction();
     const label = props.label ?? 'Continue';
-    const action = props.onPress as ActionPlan | undefined;
+    const action = isActionPlan(props.onPress) ? props.onPress : undefined;
     return (
       <button
         type="button"

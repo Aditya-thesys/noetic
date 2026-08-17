@@ -58,14 +58,45 @@ describe('parseDocument', () => {
         '```openui',
         'Sure! Here is your UI:',
         'root = Card("ok")',
-        'bad',
+        'bad = Card(',
         '```',
       ].join('\n'),
     );
     expect(doc.root).toBe('root');
-    // fence lines skipped silently; prose + non-assignment line → diagnostics
+    // fence lines skipped silently; prose + unterminated statement → diagnostics
     expect(doc.diagnostics.length).toBe(2);
     expect(doc.statements.bad).toBeUndefined();
+  });
+
+  test('a malformed statement never enters the document or swallows later refs into it', () => {
+    // An unclosed bracket glues every following line into one buffered
+    // statement; that whole run must become a diagnostic, not a statement
+    // that streams to clients or lands in surface recall.
+    const doc = parseDocument(
+      [
+        'root = Card("ok")',
+        'bad = Card(',
+        'orphan = Progress("not a number")',
+        'lost = Bogus("x")',
+      ].join('\n'),
+    );
+    expect(Object.keys(doc.statements)).toEqual([
+      'root',
+    ]);
+    expect(doc.diagnostics.length).toBe(1);
+    expect(doc.diagnostics[0]?.source).toContain('bad = Card(');
+  });
+
+  test('an unterminated string is a diagnostic, not a statement', () => {
+    const doc = parseDocument(
+      [
+        'root = Card("ok")',
+        'a = Text("dangling',
+      ].join('\n'),
+    );
+    expect(doc.root).toBe('root');
+    expect(doc.statements.a).toBeUndefined();
+    expect(doc.diagnostics.length).toBe(1);
   });
 
   test('re-assignment replaces and moves ref to end of order', () => {

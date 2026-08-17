@@ -34,8 +34,9 @@ describe('openUi codec', () => {
   test('is an OutputCodec carrying the library prompt', () => {
     const codec = openUi(testLibrary());
     expect(isOutputCodec(codec)).toBe(true);
-    // Prompt wording comes from @openuidev/lang-core.
-    expect(codec.instructions).toContain('Component Signatures');
+    // Structural checks only: prompt wording comes from @openuidev/lang-core.
+    expect(codec.instructions).toContain('Card(');
+    expect(codec.instructions).toContain('@ToAssistant');
   });
 
   test('push emits one typed event per completed statement', () => {

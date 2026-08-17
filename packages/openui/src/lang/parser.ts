@@ -10,6 +10,8 @@
  * diagnostics, never throws — models are imperfect.
  */
 
+import type { LibraryJSONSchema, Parser } from '@openuidev/lang-core';
+import { createParser } from '@openuidev/lang-core';
 import type { UiDiagnostic, UiDocument, UiStatement } from './document';
 import { classify, emptyDocument, ROOT_REF, splitStatement } from './document';
 
@@ -101,6 +103,47 @@ function flushStatement(state: ScannerState, out: ScannedLine[]): void {
 
 //#region Statement acceptance
 
+const BARE_SCHEMA: LibraryJSONSchema = {
+  $defs: {},
+};
+
+/**
+ * Structural gate: lang-core parses each completed statement before it is
+ * admitted, so malformed source (unbalanced brackets, unterminated strings,
+ * expression garbage) becomes a diagnostic instead of entering the document,
+ * streaming to clients, or being serialized into surface recall. The schema is
+ * empty on purpose: unknown-component errors are expected and ignored here,
+ * because library validation is `validateDocument`'s job downstream.
+ */
+const structuralParser: Parser = createParser(BARE_SCHEMA);
+
+function structuralDiagnostic(source: string, line: number): UiDiagnostic | null {
+  try {
+    const parsed = structuralParser.parse(source);
+    if (parsed.meta.incomplete) {
+      return {
+        line,
+        message: 'incomplete statement (unbalanced brackets or unterminated string)',
+        source,
+      };
+    }
+    if (parsed.meta.statementCount === 0) {
+      return {
+        line,
+        message: 'not a parseable statement',
+        source,
+      };
+    }
+    return null;
+  } catch (e) {
+    return {
+      line,
+      message: e instanceof Error ? e.message : String(e),
+      source,
+    };
+  }
+}
+
 /** Assemble one statement line into a `UiStatement`, or a diagnostic / skip. */
 function acceptStatement(source: string, line: number): UiStatement | UiDiagnostic | null {
   if (source.startsWith(FENCE_PREFIX) || COMMENT_PREFIXES.some((p) => source.startsWith(p))) {
@@ -113,6 +156,10 @@ function acceptStatement(source: string, line: number): UiStatement | UiDiagnost
       message: 'not an assignment statement',
       source,
     };
+  }
+  const malformed = structuralDiagnostic(source, line);
+  if (malformed !== null) {
+    return malformed;
   }
   return {
     ref: split.ref,
