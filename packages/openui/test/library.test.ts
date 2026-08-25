@@ -109,6 +109,13 @@ describe('validateDocument', () => {
     expect(issues[0]?.message).toContain("'title'");
   });
 
+  test('flags a literal prop of the wrong type', () => {
+    const issues = validateDocument(lib, parseDocument('root = Progress("hi")'));
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.component).toBe('Progress');
+    expect(issues[0]?.message).toContain("prop 'pct'");
+  });
+
   test('literal prop boundaries: 0 and 100 pass, 101 fails, refs skipped', () => {
     expect(validateDocument(lib, parseDocument('root = Progress(0)'))).toEqual([]);
     expect(validateDocument(lib, parseDocument('root = Progress(100)'))).toEqual([]);

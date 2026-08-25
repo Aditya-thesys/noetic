@@ -242,6 +242,15 @@ function fromParseError(error: ValidationError): UiValidationIssue {
         component: error.component,
         message: `prop '${error.path.replace(/^\//, '')}' is required`,
       };
+    case 'type-mismatch':
+      // Owned wording: keep the `prop '<name>'` prefix consistent with the
+      // Zod value checks (and stable across lang-core prose changes), with
+      // lang-core's own detail appended.
+      return {
+        ref,
+        component: error.component,
+        message: `prop '${error.path.replace(/^\//, '')}' rejects: ${error.message}`,
+      };
     default:
       return {
         ref,
