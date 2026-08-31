@@ -89,14 +89,14 @@ export interface CreateLibraryOptions {
 }
 
 /**
- * Rules appended to every generated prompt so the model contract is at least
- * as strong as the pre-lang-core prompt. lang-core only teaches Action steps
- * when a component prop is typed `ActionExpression`, which the renderer-free
- * bridge does not use, so the Action vocabulary is taught here.
+ * Rules appended to every generated prompt. lang-core's base prompt already
+ * teaches `Action`, `@Run`, and `@Set` (via its tool-workflow and bindings
+ * sections), but `@ToAssistant` lives only in its Action section, which renders
+ * only when a component prop is typed `ActionExpression`. The renderer-free
+ * bridge has no such props, so `@ToAssistant` is the one step we teach here.
  */
 const NOETIC_PROMPT_RULES: readonly string[] = [
-  'Interactive props accept an Action block: `Action([@Run(ref), @Set($var, value), @ToAssistant("message")])`. Steps run sequentially. Use `@ToAssistant` for buttons that send the assistant a message.',
-  'When a tool can supply the data, fetch it with `Query()` instead of inventing values.',
+  '`@ToAssistant("message")` is an Action step that sends the assistant a message: `Action([@ToAssistant("Tell me more")])`. Use it for conversational buttons.',
 ];
 
 /** @public Build a library from component definitions. */
@@ -242,15 +242,18 @@ function fromParseError(error: ValidationError): UiValidationIssue {
         component: error.component,
         message: `prop '${error.path.replace(/^\//, '')}' is required`,
       };
-    case 'type-mismatch':
-      // Owned wording: keep the `prop '<name>'` prefix consistent with the
-      // Zod value checks (and stable across lang-core prose changes), with
-      // lang-core's own detail appended.
+    case 'type-mismatch': {
+      // Own the `prop '<name>'` prefix (consistent with the Zod value checks);
+      // append lang-core's detail with its redundant `field "/path"` prefix
+      // stripped, so the prop is not named twice.
+      const prop = error.path.replace(/^\//, '');
+      const detail = error.message.replace(/^field\s+"[^"]*"\s*/, '');
       return {
         ref,
         component: error.component,
-        message: `prop '${error.path.replace(/^\//, '')}' rejects: ${error.message}`,
+        message: `prop '${prop}' rejects: ${detail}`,
       };
+    }
     default:
       return {
         ref,
@@ -420,6 +423,13 @@ export function validateDocument(library: UiLibrary, doc: UiDocument): UiValidat
   // Statements unreachable from the entry tree get no errors from lang-core;
   // re-resolve each orphan as its own root (against the full source, so its
   // in-document references still resolve) and validate that tree as well.
+  //
+  // Each pass re-parses the full source, so this is O(orphans x statements).
+  // The common path — a turn with a `root` — has no orphans and stays a single
+  // parse. The quadratic only bites a degenerate root-less turn that emits many
+  // top-level statements; a batched single-parse pass would need lang-core to
+  // resolve a synthetic multi-root, which it does not expose, so it is a
+  // deliberate follow-up rather than premature schema surgery here.
   for (const orphanRef of main.meta.orphaned) {
     collect(parser.parse(`${source}\nroot = ${orphanRef}`), orphanRef);
   }

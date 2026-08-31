@@ -160,8 +160,17 @@ describe('validateDocument', () => {
   });
 
   test('a literal object prop containing a `k` key is data, not an AST node', () => {
-    const doc = parseDocument('root = Card("T", [{k: 1, label: "x"}])');
-    expect(validateDocument(lib, doc)).toEqual([]);
+    // A plain object that happens to carry a `k` field must be treated as data,
+    // not misread as an openui-lang AST node and skipped. Accepting position:
+    // no false positive; rejecting position: still validated.
+    expect(validateDocument(lib, parseDocument('root = Card("T", [{k: 1, label: "x"}])'))).toEqual(
+      [],
+    );
+    const rejected = validateDocument(lib, parseDocument('root = Text({k: 1, label: "x"})'));
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.message).toContain("prop 'value'");
+    // the prop is named once, not doubled by lang-core's `field "/value"` prefix
+    expect(rejected[0]?.message).not.toContain('field "');
   });
 
   test('exotic prop schemas degrade to "any" in the prompt', () => {
